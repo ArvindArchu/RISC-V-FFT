@@ -49,9 +49,65 @@ module cpu(
     wire [31:0] imm_s2 = {{20{inst2[31]}}, inst2[31:25], inst2[11:7]};
     wire [31:0] imm_b2 = {{19{inst2[31]}}, inst2[31], inst2[7], inst2[30:25], inst2[11:8], 1'b0};
 
-    //raw hazard check
-    wire hazard = (rd1 != 0) && ((rd1 == rs1_2) || (rd1 == rs2_2));
-    wire issue_inst2 = ~hazard;
+    // -------------------------
+    // Functional-unit usage signals & structural hazards
+    // -------------------------
+    // Determine whether instruction uses ALU-like ops (arithmetic/logic/branches/jalr)
+    // We treat R-type, I-type ALU ops, branch, JALR/JAL as ALU users (JAL uses PC math but doesn't use ALU result)
+    // Adjust the opcode checks to match your opcodes.vh definitions.
+    wire uses_mem1 = (opcode1 == `OP_LOAD) || (opcode1 == `OP_STORE);
+    wire uses_mem2 = (opcode2 == `OP_LOAD) || (opcode2 == `OP_STORE);
+
+    // M-extension (MAC) detected from alu_ctrl range (10..13 used earlier)
+    wire uses_mac1 = (alu_ctrl1 >= 5'd10 && alu_ctrl1 <= 5'd13);
+    wire uses_mac2 = (alu_ctrl2 >= 5'd10 && alu_ctrl2 <= 5'd13);
+
+    // ALU usage: ops that use ALU (R-type, I-type arithmetic/logical, branch target/jalr calc)
+    // Adjust/add opcodes if your ISA defines more ALU-using opcodes
+    wire uses_alu1 = (opcode1 == `OP_RTYPE) || (opcode1 == `OP_ITYPE) || (opcode1 == `OP_BRANCH) || (opcode1 == `OP_JALR) || (opcode1 == `OP_JAL);
+    wire uses_alu2 = (opcode2 == `OP_RTYPE) || (opcode2 == `OP_ITYPE    ) || (opcode2 == `OP_BRANCH) || (opcode2 == `OP_JALR) || (opcode2 == `OP_JAL);
+
+    // If an instruction maps to MAC (M-extension), treat it as MAC user, not ALU user:
+    assign uses_alu1 = uses_alu1 & ~uses_mac1;
+    assign uses_alu2 = uses_alu2 & ~uses_mac2;
+
+    // Availability of parallel functional units in your microarchitecture:
+    // - You currently have two ALU+MAC instances in the design, so ALU/MAC parallelism exists.
+    // - Data memory is single-ported (we used a single Data_MEM instance). Adjust if you add a second memory port.
+    localparam dual_alu_available = 1'b1;
+    localparam dual_mac_available = 1'b1;
+    localparam dual_mem_available = 1'b0;
+
+    // Structural hazard detection:
+    // if both instructions require the same single-ported resource and only one instance exists => structural hazard.
+    wire structural_alu_hazard = (uses_alu1 && uses_alu2 && !dual_alu_available);
+    wire structural_mac_hazard = (uses_mac1 && uses_mac2 && !dual_mac_available);
+    wire structural_mem_hazard = (uses_mem1 && uses_mem2 && !dual_mem_available);
+
+    wire structural_hazard = structural_alu_hazard | structural_mac_hazard | structural_mem_hazard;
+
+    // -------------------------
+    // RAW / WAW / Load-use hazard checks
+    // -------------------------
+    // RAW: inst2 reads a reg that inst1 will write (and inst1 actually writes)
+    wire raw_hazard_rs1 = (rd1 != 5'd0) && ((rd1 == rs1_2));
+    wire raw_hazard_rs2 = (rd1 != 5'd0) && ((rd1 == rs2_2));
+    wire raw_hazard = (RegWrite1) && (raw_hazard_rs1 || raw_hazard_rs2);
+
+    // WAW: both write the same destination register
+    wire waw_hazard = (rd1 != 5'd0) && (rd1 == rd2) && RegWrite1 && RegWrite2;
+
+    // Load-use: inst1 is a load and inst2 reads the loaded register — cannot forward in a single-cycle memory model
+    wire load_use_hazard = (opcode1 == `OP_LOAD) && ((rd1 == rs1_2) || (rd1 == rs2_2));
+
+    // -------------------------
+    // Final hazard and issue logic
+    // -------------------------
+    // If any hazard exists, do not issue inst2 this cycle.
+    wire any_hazard = raw_hazard | waw_hazard | load_use_hazard | structural_hazard;
+
+    // issue_inst2 should be 1 only if no hazard and other checks (like reset) allow it.
+    assign issue_inst2 = (~any_hazard) && /* you can keep reset guard if needed */ 1'b1;
 
     //Control signals per instruction
     control_unit u_ctrl1 (
@@ -192,8 +248,10 @@ module cpu(
     wire [6:0] dbg_op2 = opcode2;
 
     always @(posedge clk) begin
-        $display("PC=%0d | rd1=%0d rs1_2=%0d rs2_2=%0d forward_rs1=%b forward_rs2=%b ex1=%h ex2=%h",
-         pc, rd1, rs1_2, rs2_2, (rd1==rs1_2), (rd1==rs2_2), ex1_Y, ex2_Y);
+        //$display("PC=%0d | rd1=%0d rs1_2=%0d rs2_2=%0d forward_rs1=%b forward_rs2=%b ex1=%h ex2=%h",
+        // pc, rd1, rs1_2, rs2_2, (rd1==rs1_2), (rd1==rs2_2), ex1_Y, ex2_Y);
+        $display("T=%0t PC=%0d issue2=%b RAW=%b WAW=%b LOADUSE=%b STRUCT=%b",
+           $time, pc, issue_inst2, raw_hazard, waw_hazard, load_use_hazard, structural_hazard);
 
     end
 

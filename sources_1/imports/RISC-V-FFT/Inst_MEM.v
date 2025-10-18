@@ -12,6 +12,7 @@ module Inst_MEM(
         for (i = 0; i < 256; i = i + 1)
             mem[i] = 32'b000000000000_00000_000_00000_0010011; // ADDI x0,x0,0 -> NOP
 
+        /*
         // ---------- Dual-issue test program ----------
         // Cycle 0: ADDI x1, x0, 5         ; inst1
         mem[0] = 32'b000000000101_00000_000_00001_0010011;
@@ -40,6 +41,23 @@ module Inst_MEM(
 
         // Cycle 5: ADD x14, x12, x13
         mem[10] = 32'b0000000_01101_01100_000_01110_0110011;
+        
+        // ADDI x1, x0, 5
+    mem[0] = 32'b000000000101_00000_000_00001_0010011;
+    // ADD x2, x1, x1   --> RAW hazard (reads x1 written by inst1)
+    mem[1] = 32'b0000000_00001_00001_000_00010_0110011;
+
+        */
+    // WAW: Both instructions write to x1
+    mem[2] = 32'b000000000101_00000_000_00001_0010011; // ADDI x1, x0, 5
+    mem[3] = 32'b000000000111_00000_000_00001_0010011; // ADDI x1, x0, 7
+    // LOADUSE: LW followed immediately by ADD using loaded value
+    mem[4] = 32'b000000000000_00000_010_00001_0000011; // LW x1, 0(x0)
+    mem[5] = 32'b0000000_00001_00001_000_00010_0110011; // ADD x2, x1, x1
+    mem[6] = 32'b0000000_00001_00010_000_00011_0110011; // ADD x3, x1, x2
+    mem[7] = 32'b0000000_00011_00100_000_00101_0110011; // ADD x5, x3, x4
+
+
 
         // rest remain NOPs
     end
