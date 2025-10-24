@@ -24,7 +24,7 @@ module cpu_tb;
 
         // Dump register values
         $display("=== Register File Contents ===");
-        for (i = 0; i < 32; i = i + 1) begin
+        for (i = 0; i < 11; i = i + 1) begin
             $display("x%0d = %h", i, uut.u_regfile.regs[i]);
         end
 
