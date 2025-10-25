@@ -21,6 +21,7 @@ module cpu(
     Inst_MEM u_Inst_MEM2(.address(pc_plus_4), .inst(inst2_f));
     
     // Fetch/Decode pipeline registers
+    reg [31:0] fd_pc; // <-- ADD THIS: Pipelined PC for fd_inst1
     reg [31:0] fd_inst1, fd_inst2;
     reg fd_valid;
     
@@ -41,16 +42,430 @@ module cpu(
     wire [4:0] rs2_2 = fd_inst2[24:20];
     wire [6:0] funct7_2 = fd_inst2[31:25];
 
-    // Immediate generation
+    // Immediate generation (RISC-V correct encoding)
+
+    // I-type: [31:20]
     wire [31:0] imm_i1 = {{20{fd_inst1[31]}}, fd_inst1[31:20]};
-    wire [31:0] imm_s1 = {{20{fd_inst1[31]}}, fd_inst1[31:25], fd_inst1[11:7]};
-    wire [31:0] imm_b1 = {{19{fd_inst1[31]}}, fd_inst1[31], fd_inst1[7], fd_inst1[30:25], fd_inst1[11:8], 1'b0};
-    wire [31:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[31], fd_inst1[19:12], fd_inst1[20], fd_inst1[30:21], 1'b0};
-    
     wire [31:0] imm_i2 = {{20{fd_inst2[31]}}, fd_inst2[31:20]};
+
+    // S-type: [31:25 | 11:7]
+    wire [31:0] imm_s1 = {{20{fd_inst1[31]}}, fd_inst1[31:25], fd_inst1[11:7]};
     wire [31:0] imm_s2 = {{20{fd_inst2[31]}}, fd_inst2[31:25], fd_inst2[11:7]};
-    wire [31:0] imm_b2 = {{19{fd_inst2[31]}}, fd_inst2[31], fd_inst2[7], fd_inst2[30:25], fd_inst2[11:8], 1'b0};
-    wire [31:0] imm_j2 = {{11{fd_inst2[31]}}, fd_inst2[31], fd_inst2[19:12], fd_inst2[20], fd_inst2[30:21], 1'b0};
+
+    // B-type: [31 | 7 | 30:25 | 11:8 | 0]
+    wire [31:0] imm_b1 = {{19{fd_inst1[31]}}, fd_inst1[31], fd_inst1[7],
+                        fd_inst1[30:25], fd_inst1[11:8], 1'b0};
+    wire [31:0] imm_b2 = {{19{fd_inst2[31]}}, fd_inst2[31], fd_inst2[7],
+                        fd_inst2[30:25], fd_inst2[11:8], 1'b0};
+
+    // J-type: [31 | 19:12 | 20 | 30:21 | 0]
+    // Corrected format: {sign_ext[31:21], imm[20], imm[19:12], imm[11], imm[10:1], imm[0]}
+    wire [31:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[31],
+                        fd_inst1[19:12], fd_inst1[20],
+                        fd_inst1[30:21], 1'b0};
+    wire [31:0] imm_j2 = {{11{fd_inst2[31]}}, fd_inst2[31],
+                        fd_inst2[19:12], fd_inst2[20],
+                        fd_inst2[30:21], 1'b0};
+
+    // Branch/Jump targets
+    // Use the pipelined PC 'fd_pc' which corresponds to fd_inst1
+    wire [31:0] pc_inst1 = fd_pc; // <-- CHANGE THIS (was 'pc')
+    wire [31:0] pc_inst2 = fd_pc + 32'd4;
+    
+    wire [31:0] jal_target1 = pc_inst1 + imm_j1;
+    wire [31:0] jal_target2 = pc_inst2 + imm_j2; // Fixed base address
+    wire [31:0] branch_target1 = pc_inst1 + imm_b1;
+    
+    // =========================================================================
+    // Control Signals
+    // =========================================================================
+    wire RegWrite1, MemRead1, MemWrite1, MemToReg1, ALUSrc1, Branch1;
+    wire RegWrite2, MemRead2, MemWrite2, MemToReg2, ALUSrc2, Branch2;
+
+    control_unit u_ctrl1 (
+        .opcode(opcode1),
+        .RegWrite(RegWrite1),
+        .MemRead(MemRead1),
+        .MemWrite(MemWrite1),
+        .MemToReg(MemToReg1),
+        .ALUSrc(ALUSrc1),
+        .Branch(Branch1)
+    );
+
+    control_unit u_ctrl2 (
+        .opcode(opcode2),
+        .RegWrite(RegWrite2),
+        .MemRead(MemRead2),
+        .MemWrite(MemWrite2),
+        .MemToReg(MemToReg2),
+        .ALUSrc(ALUSrc2),
+        .Branch(Branch2)
+    );
+
+    wire [4:0] alu_ctrl1, alu_ctrl2;
+    alu_control u_alu_ctrl1 (
+        .opcode(opcode1),
+        .funct3(funct3_1),
+        .funct7(funct7_1),
+        .ctrl(alu_ctrl1)
+    );
+
+    alu_control u_alu_ctrl2 (
+        .opcode(opcode2),
+        .funct3(funct3_2),
+        .funct7(funct7_2),
+        .ctrl(alu_ctrl2)
+    );
+
+    // =========================================================================
+    // Register File
+    // =========================================================================
+    wire [31:0] rs1_data1, rs2_data1, rs1_data2, rs2_data2;
+    
+    register_file_dual u_regfile (
+        .clk(clk),
+        .reset(reset),
+        .we1(wb_we1),
+        .we2(wb_we2),
+        .rs1_1(rs1_1),
+        .rs2_1(rs2_1),
+        .rs1_2(rs1_2),
+        .rs2_2(rs2_2),
+        .rd1(wb_rd1),
+        .rd2(wb_rd2),
+        .wdata1(wb_wdata1),
+        .wdata2(wb_wdata2),
+        .rdata1_1(rs1_data1),
+        .rdata2_1(rs2_data1),
+        .rdata1_2(rs1_data2),
+        .rdata2_2(rs2_data2)
+    );
+
+    // =========================================================================
+    // Hazard Detection
+    // =========================================================================
+    wire is_mem1 = (opcode1 == `OP_LOAD) || (opcode1 == `OP_STORE);
+    wire is_mem2 = (opcode2 == `OP_LOAD) || (opcode2 == `OP_STORE);
+    
+    // Control flow instructions block superscalar execution
+    wire is_control_flow1 = (opcode1 == `OP_BRANCH) || (opcode1 == `OP_JAL) || (opcode1 == `OP_JALR);
+    wire is_control_flow2 = (opcode2 == `OP_BRANCH) || (opcode2 == `OP_JAL) || (opcode2 == `OP_JALR);
+    
+    // RAW hazard: inst2 reads a register that inst1 writes
+    wire raw_rs1 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs1_2);
+    wire raw_rs2 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs2_2);
+    wire raw_hazard = raw_rs1 || raw_rs2;
+    
+    // Load-use hazard
+    wire load_use_hazard = (opcode1 == `OP_LOAD) && raw_hazard;
+    
+    // WAW hazard
+    wire waw_hazard = (rd1 != 5'd0) && (rd1 == rd2) && RegWrite1 && RegWrite2;
+    
+    // Blocking conditions
+    wire blocks_superscalar = is_mem1 || is_mem2 || is_control_flow1 || is_control_flow2;
+    
+    // Issue logic
+    wire issue_inst2 = ~load_use_hazard && ~waw_hazard && ~blocks_superscalar && fd_valid;
+
+    // =========================================================================
+    // Execute Stage
+    // =========================================================================
+    // EX-EX forwarding
+    wire forward_rs1_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs1_2) && !MemToReg1;
+    wire forward_rs2_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_2) && !MemToReg1;
+    
+    wire [31:0] rs1_data2_fwd = forward_rs1_2 ? ex1_Y : rs1_data2;
+    wire [32:0] rs2_data2_fwd = forward_rs2_2 ? ex1_Y : rs2_data2;
+    
+    wire [31:0] alu_B1 = ALUSrc1 ? ((opcode1 == `OP_STORE) ? imm_s1 : imm_i1) : rs2_data1;
+    wire [31:0] alu_B2 = ALUSrc2 ? ((opcode2 == `OP_STORE) ? imm_s2 : imm_i2) : rs2_data2_fwd;
+    
+    wire [31:0] alu_Y1, alu_Y2, mac_Y1, mac_Y2;
+    
+    ALU u_alu1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(alu_Y1));
+    MAC u_mac1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(mac_Y1));
+    
+    ALU u_alu2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(alu_Y2));
+    MAC u_mac2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(mac_Y2));
+    
+    wire uses_mac1 = (alu_ctrl1 >= 5'd10 && alu_ctrl1 <= 5'd13);
+    wire uses_mac2 = (alu_ctrl2 >= 5'd10 && alu_ctrl2 <= 5'd13);
+    
+    wire [31:0] ex1_Y = uses_mac1 ? mac_Y1 : alu_Y1;
+    wire [31:0] ex2_Y = uses_mac2 ? mac_Y2 : alu_Y2;
+    
+    // JAL/JALR
+    wire is_jal1 = (opcode1 == `OP_JAL);
+    wire is_jalr1 = (opcode1 == `OP_JALR);
+    wire is_jal2 = (opcode2 == `OP_JAL);
+    wire is_jalr2 = (opcode2 == `OP_JALR);
+    
+    wire [31:0] link_addr1 = pc_inst1 + 32'd4;
+    wire [31:0] link_addr2 = pc_inst2 + 32'd4; // pc + 8
+    
+    // JALR target
+    wire [31:0] jalr_target1 = (rs1_data1 + imm_i1) & ~32'd1;
+
+    // =========================================================================
+    // Branch Logic
+    // =========================================================================
+    wire branch_taken1 = (opcode1 == `OP_BRANCH) && (
+        (funct3_1 == 3'b000 && rs1_data1 == rs2_data1) ||  // BEQ
+        (funct3_1 == 3'b001 && rs1_data1 != rs2_data1)     // BNE
+    );
+
+    // =========================================================================
+    // Memory Stage
+    // =========================================================================
+    wire [31:0] mem_rdata;
+    wire [31:0] mem_addr = ex1_Y;
+    wire [31:0] mem_wdata = rs2_data1;
+    wire mem_we = MemWrite1 && is_mem1;
+    
+    Data_MEM u_dmem (
+        .clk(clk),
+        .reset(reset),
+        .write_en(mem_we),
+        .address(mem_addr),
+        .write_DAT(mem_wdata),
+        .read_DAT(mem_rdata)
+    );
+
+    // =========================================================================
+    // Writeback Stage
+    // =========================================================================
+    reg wb_we1, wb_we2;
+    reg [4:0] wb_rd1, wb_rd2;
+    reg [31:0] wb_wdata1, wb_wdata2;
+    
+    wire [31:0] result1 = (is_jal1 || is_jalr1) ? link_addr1 : (MemToReg1 ? mem_rdata : ex1_Y);
+    wire [31:0] result2 = (is_jal2 || is_jalr2) ? link_addr2 : ex2_Y;
+    
+    always @(posedge clk) begin
+        if (reset) begin
+            wb_we1 <= 1'b0;
+            wb_we2 <= 1'b0;
+            wb_rd1 <= 5'd0;
+            wb_rd2 <= 5'd0;
+            wb_wdata1 <= 32'd0;
+            wb_wdata2 <= 32'd0;
+        end else begin
+            // We only writeback if the instruction was valid when it was decoded
+            wb_we1 <= RegWrite1 && (rd1 != 5'd0) && fd_valid;
+            wb_rd1 <= rd1;
+            wb_wdata1 <= result1;
+            
+            // We only writeback if inst2 was valid AND issued
+            wb_we2 <= issue_inst2 && RegWrite2 && (rd2 != 5'd0) && fd_valid;
+            wb_rd2 <= rd2;
+            wb_wdata2 <= result2;
+        end
+    end
+
+    // =========================================================================
+    // PC Update and Fetch Control
+    // =========================================================================
+    reg [31:0] pc_next;
+    reg fetch_stall;
+    
+    // Detect control flow changes that require pipeline flush
+    // This is a combinatorial signal based on the *current* decoded instruction
+    wire control_flow_taken = (is_jal1 || is_jalr1 || branch_taken1) && fd_valid;
+    
+    always @(*) begin
+        fetch_stall = 1'b0;
+        
+        if (reset) begin
+            pc_next = 32'd0;
+        end else if (!fd_valid) begin
+            // Initial state: hold PC while fetching
+            pc_next = pc;
+        // Check for taken control flow instructions first
+        end else if (is_jal1) begin
+            pc_next = jal_target1;
+        end else if (is_jalr1) begin
+            pc_next = jalr_target1;
+        end else if (branch_taken1) begin
+            pc_next = branch_target1;
+        // If no control flow, check for superscalar/stall
+        end else begin
+            if (issue_inst2) begin
+                pc_next = pc + 8;
+            end else begin
+                // This stall happens if we only issue inst1
+                pc_next = pc + 4;
+                fetch_stall = 1'b1;
+            end
+        end
+    end
+    
+    
+    always @(posedge clk) begin
+        if (reset) begin
+            pc_reg <= 32'd0;
+            fd_pc <= 32'd0; // <-- ADD THIS
+            fd_inst1 <= 32'd0;
+            fd_inst2 <= 32'd0;
+            fd_valid <= 1'b0;
+        end else begin
+            // Update PC to the (potentially new) target
+            pc_reg <= pc_next;
+            
+            if (!fd_valid) begin
+                // Initial fetch
+                fd_pc <= pc; // <-- ADD THIS: PC for inst1
+                fd_inst1 <= inst1_f;
+                fd_inst2 <= inst2_f;
+                fd_valid <= 1'b1;
+            // =================================================================
+            // === THIS IS THE FIX ===
+            // If a control flow instruction was taken, we must flush the
+            // instructions that are currently in the FD register.
+            // We replace them with NOPs, which creates a 1-cycle bubble.
+            // The 'inst1_f' and 'inst2_f' we read in the 'else' block
+            // next cycle will be from the *new* 'pc_reg' value.
+            // =================================================================
+            end else if (control_flow_taken) begin
+                // Pipeline flush: insert NOPs after control flow change
+                fd_pc <= pc_next; // <-- ADD THIS: The NOPs are at the new PC
+                fd_inst1 <= 32'h00000013;  // NOP (addi x0, x0, 0)
+                fd_inst2 <= 32'h00000013;  // NOP
+                fd_valid <= 1'b1; // Keep pipeline valid, but with NOPs
+            end else if (fetch_stall) begin
+                // Stall: slide inst2 to inst1
+                // inst2_f is fetched from pc + 4 (which is pc_next)
+                fd_pc <= fd_pc + 32'd4; // <-- ADD THIS: The new fd_inst1 was at fd_pc+4
+                fd_inst1 <= fd_inst2;
+                fd_inst2 <= inst2_f;
+                fd_valid <= 1'b1;
+            end else begin
+                // Normal fetch (issue_inst2 was true)
+                // inst1_f/inst2_f are fetched from pc and pc+4 (which are pc_next-8 and pc_next-4)
+                fd_pc <= pc; // <-- ADD THIS: The new fd_inst1 is at pc
+                fd_inst1 <= inst1_f;
+                fd_inst2 <= inst2_f;
+                fd_valid <= 1'b1;
+            end
+        end
+    end
+
+    // =========================================================================
+    // Debug Output
+    // =========================================================================
+    // (Debug output unchanged)
+    wire [31:0] fd_inst1_rev = {fd_inst1[7:0], fd_inst1[15:8], fd_inst1[23:16], fd_inst1[31:24]};
+    wire [31:0] imm_j1_rev = {{11{fd_inst1_rev[31]}}, fd_inst1_rev[31], fd_inst1_rev[19:12], fd_inst1_rev[20], fd_inst1_rev[30:21], 1'b0};
+    wire [31:0] jal_target1_rev = pc + imm_j1_rev;
+    always @(posedge clk) begin
+            //if (!reset && fd_valid) begin
+            //    $display("t=%0t PC=%0d op1=%b op2=%b issue2=%b", 
+            //            $time, pc, opcode1, opcode2, issue_inst2);
+            //    $display("  fd_inst1=%h fd_inst2=%h", fd_inst1, fd_inst2);
+            //    $display("  imm_b1=%0d imm_j1=%0d", $signed(imm_b1), $signed(imm_j1));
+            //
+            //if (is_jal1) $display("  JAL1: target=%0d rd=%0d", jal_target1, rd1);
+            //if (is_jalr1) $display("  JALR1: target=%0d rd=%0d", jal_r_target1, rd1);
+            //if (opcode1 == `OP_BRANCH) $display("  BRANCH1: taken=%b target=%0d", branch_taken1, branch_target1);
+            //if (wb_we1) $display("  WB1: rd=%0d data=%h", wb_rd1, wb_wdata1);
+            //if (wb_we2) $display("  WB2: rd=%0d data=%h", wb_rd2, wb_wdata2);
+            $display("");
+            $display("DBG_FETCH t=%0t PC=%0d fd_inst1=%h", $time, pc, fd_inst1);
+            $display("DBG_BITS curr: inst[31]=%b inst[30:21]=%b inst[20]=%b inst[19:12]=%b", 
+                    fd_inst1[31], fd_inst1[30:21], fd_inst1[20], fd_inst1[19:12]);
+            $display("DBG_IMM curr: imm_j1=0x%h (%0d) jal_target1=0x%h (%0d)", imm_j1, $signed(imm_j1), jal_target1, $signed(jal_target1));
+
+
+
+            $display("DBG_REV  inst_rev=%h bits_rev: inst[31]=%b inst[30:21]=%b inst[20]=%b inst[19:12]=%b",
+                    fd_inst1_rev, fd_inst1_rev[31], fd_inst1_rev[30:21], fd_inst1_rev[20], fd_inst1_rev[19:12]);
+            $display("DBG_IMM rev: imm_j1_rev=0x%h (%0d) jal_target1_rev=0x%h (%0d)",
+                    imm_j1_rev, $signed(imm_j1_rev), jal_target1_rev, $signed(jal_target1_rev));
+            //end
+    end
+
+endmodule
+
+
+
+
+/*
+//before gemini prompts
+`timescale 1ns / 1ps
+`include "opcodes.vh"
+
+module cpu(
+    input clk,
+    input reset
+);
+
+    // =========================================================================
+    // PC Stage
+    // =========================================================================
+    reg [31:0] pc_reg;
+    wire [31:0] pc = pc_reg;
+    
+    // =========================================================================
+    // Fetch Stage  
+    // =========================================================================
+    wire [31:0] inst1_f, inst2_f;
+    wire [31:0] pc_plus_4 = pc + 32'd4;
+    Inst_MEM u_Inst_MEM1(.address(pc), .inst(inst1_f));
+    Inst_MEM u_Inst_MEM2(.address(pc_plus_4), .inst(inst2_f));
+    
+    // Fetch/Decode pipeline registers
+    reg [31:0] fd_inst1, fd_inst2;
+    reg fd_valid;
+    
+    // =========================================================================
+    // Decode Stage (uses fd_inst1, fd_inst2)
+    // =========================================================================
+    wire [6:0] opcode1 = fd_inst1[6:0];
+    wire [4:0] rd1 = fd_inst1[11:7];
+    wire [2:0] funct3_1 = fd_inst1[14:12];
+    wire [4:0] rs1_1 = fd_inst1[19:15];
+    wire [4:0] rs2_1 = fd_inst1[24:20];
+    wire [6:0] funct7_1 = fd_inst1[31:25];
+
+    wire [6:0] opcode2 = fd_inst2[6:0];
+    wire [4:0] rd2 = fd_inst2[11:7];
+    wire [2:0] funct3_2 = fd_inst2[14:12];
+    wire [4:0] rs1_2 = fd_inst2[19:15];
+    wire [4:0] rs2_2 = fd_inst2[24:20];
+    wire [6:0] funct7_2 = fd_inst2[31:25];
+
+    // Immediate generation (RISC-V correct encoding)
+    //wire [31:0] imm_i1 = {{20{fd_inst1[31]}}, fd_inst1[31:20]};
+    //wire [31:0] imm_s1 = {{20{fd_inst1[31]}}, fd_inst1[31:25], fd_inst1[11:7]};
+    //wire [31:0] imm_b1 = {{19{fd_inst1[31]}}, fd_inst1[31], fd_inst1[7], fd_inst1[30:25], fd_inst1[11:8], 1'b0};
+    //wire [31:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[19:12], fd_inst1[20], fd_inst1[30:21], fd_inst1[31], 1'b0};
+
+    //wire [31:0] imm_i2 = {{20{fd_inst2[31]}}, fd_inst2[31:20]};
+    //wire [31:0] imm_s2 = {{20{fd_inst2[31]}}, fd_inst2[31:25], fd_inst2[11:7]};
+    //wire [31:0] imm_b2 = {{19{fd_inst2[31]}}, fd_inst2[31], fd_inst2[7], fd_inst2[30:25], fd_inst2[11:8], 1'b0};
+    //wire [31:0] imm_j2 = {{11{fd_inst2[31]}}, fd_inst2[19:12], fd_inst2[20], fd_inst2[30:21], fd_inst2[31], 1'b0};
+
+    // I-type: [31:20]
+    wire [31:0] imm_i1 = {{20{fd_inst1[31]}}, fd_inst1[31:20]};
+    wire [31:0] imm_i2 = {{20{fd_inst2[31]}}, fd_inst2[31:20]};
+
+    // S-type: [31:25 | 11:7]
+    wire [31:0] imm_s1 = {{20{fd_inst1[31]}}, fd_inst1[31:25], fd_inst1[11:7]};
+    wire [31:0] imm_s2 = {{20{fd_inst2[31]}}, fd_inst2[31:25], fd_inst2[11:7]};
+
+    // B-type: [31 | 7 | 30:25 | 11:8 | 0]
+    wire [31:0] imm_b1 = {{19{fd_inst1[31]}}, fd_inst1[31], fd_inst1[7],
+                        fd_inst1[30:25], fd_inst1[11:8], 1'b0};
+    wire [31:0] imm_b2 = {{19{fd_inst2[31]}}, fd_inst2[31], fd_inst2[7],
+                        fd_inst2[30:25], fd_inst2[11:8], 1'b0};
+
+    // J-type: [31 | 19:12 | 20 | 30:21 | 0]
+    wire [31:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[31],
+                        fd_inst1[19:12], fd_inst1[20],
+                        fd_inst1[30:21], 1'b0};
+    wire [31:0] imm_j2 = {{11{fd_inst2[31]}}, fd_inst2[31],
+                        fd_inst2[19:12], fd_inst2[20],
+                        fd_inst2[30:21], 1'b0};
 
     // Branch/Jump targets
     wire [31:0] jal_target1 = pc + imm_j1;
@@ -289,11 +704,11 @@ module cpu(
                 fd_inst1 <= inst1_f;
                 fd_inst2 <= inst2_f;
                 fd_valid <= 1'b1;
-            end else if (control_flow_taken) begin
-                // Pipeline flush: insert NOPs after control flow change
-                fd_inst1 <= 32'h00000013;  // NOP (addi x0, x0, 0)
-                fd_inst2 <= 32'h00000013;  // NOP
-                fd_valid <= 1'b1;
+            //end else if (control_flow_taken) begin
+            //    // Pipeline flush: insert NOPs after control flow change
+            //    fd_inst1 <= 32'h00000013;  // NOP (addi x0, x0, 0)
+            //    fd_inst2 <= 32'h00000013;  // NOP
+            //    fd_valid <= 1'b1;
             end else if (fetch_stall) begin
                 // Stall: slide inst2 to inst1
                 fd_inst1 <= fd_inst2;
@@ -309,25 +724,40 @@ module cpu(
     // =========================================================================
     // Debug Output
     // =========================================================================
+    // Byte-reversed view (common Inst_MEM endianness problem)
+    wire [31:0] fd_inst1_rev = {fd_inst1[7:0], fd_inst1[15:8], fd_inst1[23:16], fd_inst1[31:24]};
+    wire [31:0] imm_j1_rev = {{11{fd_inst1_rev[31]}}, fd_inst1_rev[31], fd_inst1_rev[19:12], fd_inst1_rev[20], fd_inst1_rev[30:21], 1'b0};
+    wire [31:0] jal_target1_rev = pc + imm_j1_rev;
     always @(posedge clk) begin
-        if (!reset && fd_valid) begin
-            $display("t=%0t PC=%0d op1=%b op2=%b issue2=%b", 
-                     $time, pc, opcode1, opcode2, issue_inst2);
-            $display("  fd_inst1=%h fd_inst2=%h", fd_inst1, fd_inst2);
-            $display("  imm_b1=%0d imm_j1=%0d", $signed(imm_b1), $signed(imm_j1));
-            
-            if (is_jal1) $display("  JAL1: target=%0d rd=%0d", jal_target1, rd1);
-            if (is_jalr1) $display("  JALR1: target=%0d rd=%0d", jalr_target1, rd1);
-            if (opcode1 == `OP_BRANCH) $display("  BRANCH1: taken=%b target=%0d", branch_taken1, branch_target1);
-            if (wb_we1) $display("  WB1: rd=%0d data=%h", wb_rd1, wb_wdata1);
-            if (wb_we2) $display("  WB2: rd=%0d data=%h", wb_rd2, wb_wdata2);
+            //if (!reset && fd_valid) begin
+            //    $display("t=%0t PC=%0d op1=%b op2=%b issue2=%b", 
+            //            $time, pc, opcode1, opcode2, issue_inst2);
+            //    $display("  fd_inst1=%h fd_inst2=%h", fd_inst1, fd_inst2);
+            //    $display("  imm_b1=%0d imm_j1=%0d", $signed(imm_b1), $signed(imm_j1));
+            //
+            //if (is_jal1) $display("  JAL1: target=%0d rd=%0d", jal_target1, rd1);
+            //if (is_jalr1) $display("  JALR1: target=%0d rd=%0d", jalr_target1, rd1);
+            //if (opcode1 == `OP_BRANCH) $display("  BRANCH1: taken=%b target=%0d", branch_taken1, branch_target1);
+            //if (wb_we1) $display("  WB1: rd=%0d data=%h", wb_rd1, wb_wdata1);
+            //if (wb_we2) $display("  WB2: rd=%0d data=%h", wb_rd2, wb_wdata2);
             $display("");
-        end
+            $display("DBG_FETCH t=%0t PC=%0d fd_inst1=%h", $time, pc, fd_inst1);
+            $display("DBG_BITS curr: inst[31]=%b inst[30:21]=%b inst[20]=%b inst[19:12]=%b", 
+                    fd_inst1[31], fd_inst1[30:21], fd_inst1[20], fd_inst1[19:12]);
+            $display("DBG_IMM curr: imm_j1=0x%h (%0d) jal_target1=0x%h (%0d)", imm_j1, $signed(imm_j1), jal_target1, $signed(jal_target1));
+
+
+
+            $display("DBG_REV  inst_rev=%h bits_rev: inst[31]=%b inst[30:21]=%b inst[20]=%b inst[19:12]=%b",
+                    fd_inst1_rev, fd_inst1_rev[31], fd_inst1_rev[30:21], fd_inst1_rev[20], fd_inst1_rev[19:12]);
+            $display("DBG_IMM rev: imm_j1_rev=0x%h (%0d) jal_target1_rev=0x%h (%0d)",
+                    imm_j1_rev, $signed(imm_j1_rev), jal_target1_rev, $signed(jal_target1_rev));
+            //end
     end
 
 endmodule
 
-
+*/
 /*
 `timescale 1ns / 1ps
 `include "opcodes.vh"
