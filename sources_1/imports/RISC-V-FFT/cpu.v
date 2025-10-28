@@ -1,3 +1,4 @@
+// fft works , basic sueprscalar works but breaks even for multiple add instructions, brancha and jump completely broken
 `timescale 1ns / 1ps
 `include "opcodes.vh"
 
@@ -168,55 +169,7 @@ module cpu #(
                                    ((load_dest_mem == rs1_1 && rs1_1 != 5'd0) || 
                                     (load_dest_mem == rs2_1 && rs2_1 != 5'd0));
 
-    /*
-    // =========================================================================
-    // FFT Accelerator Integration
-    // =========================================================================
-    wire fft_start;
-    wire fft_busy, fft_done;
 
-    wire [ADDR_W-1:0] fft_mem_addr;
-    wire [CPU_DATA_W-1:0] fft_mem_wdata, mem_rdata;
-    wire fft_mem_we;
-
-    // Flattened FFT buses
-    wire signed [127:0] fft_in_re_flat;
-    wire signed [127:0] fft_in_im_flat;
-    wire signed [127:0] fft_out_re_flat;
-    wire signed [127:0] fft_out_im_flat;
-
-    fft8_core u_fft8 (
-        .clk(clk),
-        .reset(reset),
-        .start(fft_start),
-        .done(fft_done),
-        .in_re_flat(fft_in_re_flat),
-        .in_im_flat(fft_in_im_flat),
-        .out_re_flat(fft_out_re_flat),
-        .out_im_flat(fft_out_im_flat)
-    );
-
-    fft_fsm u_fft_fsm (
-        .clk(clk),
-        .reset(reset),
-        .start(FFTStart1),
-        .start_addr(rs1_data1),
-        .end_addr(rs2_data1),
-        .busy(fft_busy),
-        .done(fft_done),
-        .mem_rdata(mem_rdata),          // <- from Data_MEM
-        .mem_addr(fft_mem_addr),        // <- to MUX
-        .mem_wdata(fft_mem_wdata),      // <- to MUX
-        .mem_we(fft_mem_we),            // <- to MUX
-        .fft_start(fft_start),
-        .fft_done(fft_done),
-        .in_re_flat(fft_in_re_flat),
-        .in_im_flat(fft_in_im_flat),
-        .out_re_flat(fft_out_re_flat),
-        .out_im_flat(fft_out_im_flat)
-    );
-
-    */
     // ============================================================
     //                    FFT ACCELERATOR SECTION
     // ============================================================
@@ -473,86 +426,54 @@ module cpu #(
     end
 
     // =========================================================================
-    // PC Update and Fetch Control
+    // PC Update and Fetch Control  (CLEAN VERSION)
     // =========================================================================
-    
-    reg fetch_stall;
-
     always @(*) begin
-        fetch_stall = 1'b0;
-
         if (reset)
             pc_next = 32'd0;
-        else if (fft_busy)
-            pc_next = pc;  // <--- NEW: hold PC during FFT
-        else if (!fd_valid)
-            pc_next = pc;
-        else if (pipeline_stall) begin
-            pc_next = pc;
-            fetch_stall = 1'b0;
-        end else if (control_flow_taken) begin
-            if (is_jal1)
-                pc_next = jal_target1;
-            else if (is_jalr1)
-                pc_next = jalr_target1;
-            else
-                pc_next = branch_target1;
-            fetch_stall = 1'b0;
-        end else begin
-            if (issue_inst2) begin
-                pc_next = pc + 8;
-                fetch_stall = 1'b0;
-            end else begin
-                pc_next = pc + 4;
-                fetch_stall = 1'b1;
-            end
-        end
+        else if (fft_busy || pipeline_stall)
+            pc_next = pc;  // hold during FFT or any stall
+        else if (control_flow_taken) begin
+            if (is_jal1)       pc_next = jal_target1;
+            else if (is_jalr1) pc_next = jalr_target1;
+            else               pc_next = branch_target1;
+        end else if (issue_inst2)
+            pc_next = pc + 8;
+        else
+            pc_next = pc + 4;
     end
 
     always @(posedge clk) begin
         if (reset) begin
-            pc_reg <= 32'd0;
-            fd_pc <= 32'd0;
+            pc_reg   <= 32'd0;
+            fd_pc    <= 32'd0;
             fd_inst1 <= 32'd0;
             fd_inst2 <= 32'd0;
             fd_valid <= 1'b0;
-        end else if (pipeline_stall) begin
-            // Freeze pipeline
-            pc_reg <= pc;
-            fd_pc <= fd_pc;
+        end 
+        else if (pipeline_stall || fft_busy) begin
+            // freeze everything
+            pc_reg   <= pc;
+            fd_pc    <= fd_pc;
             fd_inst1 <= fd_inst1;
             fd_inst2 <= fd_inst2;
-            fd_valid <= fd_valid;
-        end else begin
-            pc_reg <= pc_next;
-            
-            if (!fd_valid) begin
-                fd_pc <= pc;
-                fd_inst1 <= inst1_f;
-                fd_inst2 <= inst2_f;
-                fd_valid <= 1'b1;
-            end else if (pipeline_stall) begin
-                // Insert bubble
-                fd_pc <= pc;
-                fd_inst1 <= 32'h00000013;
-                fd_inst2 <= 32'h00000013;
-                fd_valid <= 1'b1;
-            end else if (control_flow_taken) begin
-                fd_pc <= pc_next;
-                fd_inst1 <= 32'h00000013;
-                fd_inst2 <= 32'h00000013;
-                fd_valid <= 1'b1;
-            end else if (fetch_stall) begin
-                fd_pc <= pc_inst2;
-                fd_inst1 <= fd_inst2;
-                fd_inst2 <= inst2_f;
-                fd_valid <= 1'b1;
-            end else begin
-                fd_pc <= pc;
-                fd_inst1 <= inst1_f;
-                fd_inst2 <= inst2_f;
-                fd_valid <= 1'b1;
-            end
+            fd_valid <= 1'b0; // invalidate current decode to prevent RAW false triggers
+        end 
+        else if (control_flow_taken) begin
+            // flush on branch/jump
+            pc_reg   <= pc_next;
+            fd_pc    <= pc_next;
+            fd_inst1 <= 32'h00000013;
+            fd_inst2 <= 32'h00000013;
+            fd_valid <= 1'b0;
+        end 
+        else begin
+            // normal advance
+            pc_reg   <= pc_next;
+            fd_pc    <= pc;
+            fd_inst1 <= inst1_f;
+            fd_inst2 <= inst2_f;
+            fd_valid <= 1'b1;
         end
     end
 
@@ -579,6 +500,7 @@ module cpu #(
     end
 
 endmodule
+
 
 
 /*

@@ -13,6 +13,8 @@ module Inst_MEM(
         for (i = 0; i < 256; i = i + 1)
             mem[i] = 32'b000000000000_00000_000_00000_0010011; // ADDI x0,x0,0 -> NOP
 
+
+            
             mem[0] = 32'h00000537;  // LUI x10, 0x0 -> x10 = 0x00000000 (base addr)
             mem[1] = 32'h02000593;  // ADDI x11, x0, 32 -> x11 = 0x00000020 (end addr)
             mem[2] = 32'h00B5000B;  // CUSTOM FFT x0, x10, x11  (start FFT)
@@ -25,41 +27,18 @@ module Inst_MEM(
             // Demonstrates parallel execution across multiple cycles
             // ========================================================================
             mem[6]  = 32'h00100093; // addi x1, x0, 1
-            mem[7]  = 32'h00200113; // addi x2, x0, 2
-            // Cycle 5 (PC=32)
+            mem[7]  = 32'h00200113; // addi x2, x0, 2// Cycle 5 (PC=32)
             mem[8]  = 32'h00300193; // addi x3, x0, 3
-            mem[9]  = 32'h00400213; // addi x4, x0, 4
-            // Cycle 6 (PC=40)
+            mem[9]  = 32'h00400213; // addi x4, x0, 4// Cycle 6 (PC=40)
             mem[10] = 32'h00500293; // addi x5, x0, 5
             mem[11] = 32'h00600313; // addi x6, x0, 6
-
-            mem[12]  = 32'h00100093; // addi x1, x0, 1
-            mem[13]  = 32'h00200113; // addi x2, x0, 2
-            // Cycle 5 (PC=32)
-            mem[14]  = 32'h00300193; // addi x3, x0, 3
-            mem[15]  = 32'h00400213; // addi x4, x0, 4
-            // Cycle 6 (PC=40)
-            mem[16] = 32'h00500293; // addi x5, x0, 5
-            mem[17] = 32'h00600313; // addi x6, x0, 6
-
             // --- Round 1 Increment (Starts at PC=48) ---
-            //mem[12] = 32'b000000000001_00001_000_00001_0010011; // addi x1, x1, 1  (x1=2)
-            //mem[13] = 32'b000000000001_00010_000_00010_0010011; // addi x2, x2, 1  (x2=3)
-            //// Cycle 8 (PC=56)
-            //
-            //mem[14] = 32'b000000000001_00100_000_00100_0010011; // addi x4, x4, 1  (x4=5)
-            // Cycle 9 (PC=64)
-            //mem[15] = 32'b000000000001_00101_000_00101_0010011; // addi x5, x5, 1  (x5=6)
-            //mem[16] = 32'b000000000001_00110_000_00110_0010011; // addi x6, x6, 1  (x6=7)
-            //mem[17] = 32'b000000000001_00011_000_00011_0010011; // addi x3, x3, 1  (x3=4)
-
-            //x0: 0 (Always zero)
-            //x1: 4 (Initialized to 1, then incremented 3 times)
-            //x2: 5 (Initialized to 2, then incremented 3 times)
-            //x3: 6 (Initialized to 3, then incremented 3 times)
-            //x4: 7 (Initialized to 4, then incremented 3 times)
-            //x5: 8 (Initialized to 5, then incremented 3 times)
-            //x6: 9 (Initialized to 6, then incremented 3 times)
+            mem[12] = 32'b000000000001_00001_000_00001_0010011; // addi x1, x1, 1  (x1=2)
+            mem[13] = 32'b000000000001_00010_000_00010_0010011; // addi x2, x2, 1  (x2=3)// Cycle 8 (PC=56)
+            mem[14] = 32'b000000000001_00100_000_00100_0010011; // addi x4, x4, 1  (x4=5)//Cycle 9 (PC=64)
+            mem[15] = 32'b000000000001_00101_000_00101_0010011; // addi x5, x5, 1  (x5=6)
+            mem[16] = 32'b000000000001_00110_000_00110_0010011; // addi x6, x6, 1  (x6=7)
+            mem[17] = 32'b000000000001_00011_000_00011_0010011; // addi x3, x3, 1  (x3=4)
         
     end
 
