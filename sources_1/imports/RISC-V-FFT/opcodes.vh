@@ -10,5 +10,6 @@
 `define OP_JALR   7'b1100111
 `define OP_LUI    7'b0110111
 `define OP_AUIPC  7'b0010111
+`define OP_CUSTOM0 7'b0001011 // Opcode for custom instructions (like FFT)
 
 `endif

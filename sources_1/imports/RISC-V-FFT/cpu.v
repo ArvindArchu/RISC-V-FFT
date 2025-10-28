@@ -1,6 +1,590 @@
 `timescale 1ns / 1ps
 `include "opcodes.vh"
 
+module cpu #(
+    parameter CPU_DATA_W = 32,  // CPU data width
+    parameter ADDR_W = 32       // Address width
+) (
+    input wire clk,
+    input wire reset
+);
+
+    // =========================================================================
+    // PC Stage, Fetch Stage, Decode Stage
+    // =========================================================================
+    reg [ADDR_W-1:0] pc_reg;
+    reg [ADDR_W-1:0] pc_next;
+    wire [ADDR_W-1:0] pc = pc_reg;
+    wire [ADDR_W-1:0] pc_plus_4 = pc + 4;
+
+    wire [CPU_DATA_W-1:0] inst1_f, inst2_f;
+    Inst_MEM u_Inst_MEM1(.address(pc), .inst(inst1_f));
+    Inst_MEM u_Inst_MEM2(.address(pc_plus_4), .inst(inst2_f));
+
+    reg [ADDR_W-1:0] fd_pc;
+    reg [CPU_DATA_W-1:0] fd_inst1, fd_inst2;
+    reg fd_valid;
+
+    wire [6:0] opcode1 = fd_inst1[6:0];
+    wire [4:0] rd1 = fd_inst1[11:7];
+    wire [2:0] funct3_1 = fd_inst1[14:12];
+    wire [4:0] rs1_1 = fd_inst1[19:15];
+    wire [4:0] rs2_1 = fd_inst1[24:20];
+    wire [6:0] funct7_1 = fd_inst1[31:25];
+
+    wire [6:0] opcode2 = fd_inst2[6:0];
+    wire [4:0] rd2 = fd_inst2[11:7];
+    wire [2:0] funct3_2 = fd_inst2[14:12];
+    wire [4:0] rs1_2 = fd_inst2[19:15];
+    wire [4:0] rs2_2 = fd_inst2[24:20];
+    wire [6:0] funct7_2 = fd_inst2[31:25];
+
+    // Immediate generation
+    wire [CPU_DATA_W-1:0] imm_i1 = {{20{fd_inst1[31]}}, fd_inst1[31:20]};
+    wire [CPU_DATA_W-1:0] imm_i2 = {{20{fd_inst2[31]}}, fd_inst2[31:20]};
+    wire [CPU_DATA_W-1:0] imm_s1 = {{20{fd_inst1[31]}}, fd_inst1[31:25], fd_inst1[11:7]};
+    wire [CPU_DATA_W-1:0] imm_s2 = {{20{fd_inst2[31]}}, fd_inst2[31:25], fd_inst2[11:7]};
+    wire [CPU_DATA_W-1:0] imm_b1 = {{19{fd_inst1[31]}}, fd_inst1[31], fd_inst1[7], fd_inst1[30:25], fd_inst1[11:8], 1'b0};
+    wire [CPU_DATA_W-1:0] imm_b2 = {{19{fd_inst2[31]}}, fd_inst2[31], fd_inst2[7], fd_inst2[30:25], fd_inst2[11:8], 1'b0};
+    wire [CPU_DATA_W-1:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[31], fd_inst1[19:12], fd_inst1[20], fd_inst1[30:21], 1'b0};
+    wire [CPU_DATA_W-1:0] imm_j2 = {{11{fd_inst2[31]}}, fd_inst2[31], fd_inst2[19:12], fd_inst2[20], fd_inst2[30:21], 1'b0};
+
+    // Branch/Jump targets
+    wire [ADDR_W-1:0] pc_inst1 = fd_pc;
+    wire [ADDR_W-1:0] pc_inst2 = fd_pc + 4;
+    wire [ADDR_W-1:0] jal_target1 = pc_inst1 + imm_j1;
+    wire [ADDR_W-1:0] jal_target2 = pc_inst2 + imm_j2;
+    wire [ADDR_W-1:0] branch_target1 = pc_inst1 + imm_b1;
+
+    // =========================================================================
+    // Control Signal Generation
+    // =========================================================================
+    wire RegWrite1, MemRead1, MemWrite1, MemToReg1, ALUSrc1, Branch1;
+    wire RegWrite2, MemRead2, MemWrite2, MemToReg2, ALUSrc2, Branch2;
+
+    //assign ALUSrc1   = (opcode1 == `OP_LOAD) || (opcode1 == `OP_STORE) || (opcode1 == `OP_ITYPE) || (opcode1 == `OP_JALR);
+    //assign MemToReg1 = (opcode1 == `OP_LOAD);
+    //assign RegWrite1 = (opcode1 == `OP_RTYPE) || (opcode1 == `OP_ITYPE) || (opcode1 == `OP_LOAD) ||
+    //                   (opcode1 == `OP_JAL) || (opcode1 == `OP_JALR) || (opcode1 == `OP_LUI) || (opcode1 == `OP_AUIPC);
+    //assign MemRead1  = (opcode1 == `OP_LOAD);
+    //assign MemWrite1 = (opcode1 == `OP_STORE);
+    //assign Branch1   = (opcode1 == `OP_BRANCH);
+
+    //assign ALUSrc2   = (opcode2 == `OP_LOAD) || (opcode2 == `OP_STORE) || (opcode2 == `OP_ITYPE) || (opcode2 == `OP_JALR);
+    //assign MemToReg2 = (opcode2 == `OP_LOAD);
+    //assign RegWrite2 = (opcode2 == `OP_RTYPE) || (opcode2 == `OP_ITYPE) || (opcode2 == `OP_LOAD) ||
+    //                   (opcode2 == `OP_JAL) || (opcode2 == `OP_JALR) || (opcode2 == `OP_LUI) || (opcode2 == `OP_AUIPC);
+    //assign MemRead2  = (opcode2 == `OP_LOAD);
+    //assign MemWrite2 = (opcode2 == `OP_STORE);
+    //assign Branch2   = (opcode2 == `OP_BRANCH);
+
+        control_unit u_ctrl1 (
+        .opcode(opcode1),
+        .RegWrite(RegWrite1),
+        .MemRead(MemRead1),
+        .MemWrite(MemWrite1),
+        .MemToReg(MemToReg1),
+        .ALUSrc(ALUSrc1),
+        .Branch(Branch1),
+        .FFTStart(FFTStart1)
+    );
+
+    control_unit u_ctrl2 (
+        .opcode(opcode2),
+        .RegWrite(RegWrite2),
+        .MemRead(MemRead2),
+        .MemWrite(MemWrite2),
+        .MemToReg(MemToReg2),
+        .ALUSrc(ALUSrc2),
+        .Branch(Branch2),
+        .FFTStart(FFTStart2)
+    );
+
+    wire [4:0] alu_ctrl1, alu_ctrl2;
+    alu_control u_alu_ctrl1 (.opcode(opcode1), .funct3(funct3_1), .funct7(funct7_1), .ctrl(alu_ctrl1));
+    alu_control u_alu_ctrl2 (.opcode(opcode2), .funct3(funct3_2), .funct7(funct7_2), .ctrl(alu_ctrl2));
+
+    // =========================================================================
+    // Register File
+    // =========================================================================
+    wire [CPU_DATA_W-1:0] rs1_data1, rs2_data1, rs1_data2, rs2_data2;
+    reg wb_we1_reg, wb_we2_reg;
+    reg [4:0] wb_rd1_reg, wb_rd2_reg;
+    reg [CPU_DATA_W-1:0] wb_wdata1_reg, wb_wdata2_reg;
+
+    register_file_dual u_regfile (
+        .clk(clk), .reset(reset), 
+        .we1(wb_we1_reg), .we2(wb_we2_reg),
+        .rs1_1(rs1_1), .rs2_1(rs2_1), .rs1_2(rs1_2), .rs2_2(rs2_2),
+        .rd1(wb_rd1_reg), .rd2(wb_rd2_reg), 
+        .wdata1(wb_wdata1_reg), .wdata2(wb_wdata2_reg),
+        .rdata1_1(rs1_data1), .rdata2_1(rs2_data1), 
+        .rdata1_2(rs1_data2), .rdata2_2(rs2_data2)
+    );
+
+    // =========================================================================
+    // Execute Stage
+    // =========================================================================
+    wire [CPU_DATA_W-1:0] alu_Y1, alu_Y2;
+    wire [CPU_DATA_W-1:0] ex1_Y = alu_Y1;
+    wire [CPU_DATA_W-1:0] ex2_Y = alu_Y2;
+
+    wire forward_rs1_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs1_2) && !MemToReg1;
+    wire forward_rs2_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_2) && !MemToReg1;
+    
+    wire [CPU_DATA_W-1:0] rs1_data2_fwd = forward_rs1_2 ? ex1_Y : rs1_data2;
+    wire [CPU_DATA_W-1:0] rs2_data2_fwd = forward_rs2_2 ? ex1_Y : rs2_data2;
+
+    wire [CPU_DATA_W-1:0] alu_B1 = ALUSrc1 ? ((opcode1 == `OP_STORE) ? imm_s1 : imm_i1) : rs2_data1;
+    wire [CPU_DATA_W-1:0] alu_B2 = ALUSrc2 ? ((opcode2 == `OP_STORE) ? imm_s2 : imm_i2) : rs2_data2_fwd;
+
+    ALU u_alu1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(alu_Y1));
+    ALU u_alu2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(alu_Y2));
+
+    // JAL/JALR & Branch
+    wire is_jal1 = (opcode1 == `OP_JAL);
+    wire is_jalr1 = (opcode1 == `OP_JALR);
+    wire is_jal2 = (opcode2 == `OP_JAL);
+    wire is_jalr2 = (opcode2 == `OP_JALR);
+    wire [ADDR_W-1:0] link_addr1 = pc_inst1 + 4;
+    wire [ADDR_W-1:0] link_addr2 = pc_inst2 + 4;
+    wire [ADDR_W-1:0] jalr_target1 = (rs1_data1 + imm_i1) & ~32'd1;
+    wire branch_taken1 = (opcode1 == `OP_BRANCH) && 
+                        ((funct3_1 == 3'b000 && rs1_data1 == rs2_data1) || 
+                         (funct3_1 == 3'b001 && rs1_data1 != rs2_data1));
+
+    // =========================================================================
+    // Hazard Detection (WITHOUT FFT)
+    // =========================================================================
+    reg load_in_ex, load_in_mem;
+    reg [4:0] load_dest_ex, load_dest_mem;
+
+    wire control_flow_taken = (is_jal1 || is_jalr1 || branch_taken1) && fd_valid;
+
+    wire stall_due_to_load_in_ex = load_in_ex && (load_dest_ex != 5'd0) && fd_valid &&
+                                  ((load_dest_ex == rs1_1 && rs1_1 != 5'd0) || 
+                                   (load_dest_ex == rs2_1 && rs2_1 != 5'd0));
+    wire stall_due_to_load_in_mem = load_in_mem && (load_dest_mem != 5'd0) && fd_valid &&
+                                   ((load_dest_mem == rs1_1 && rs1_1 != 5'd0) || 
+                                    (load_dest_mem == rs2_1 && rs2_1 != 5'd0));
+
+    /*
+    // =========================================================================
+    // FFT Accelerator Integration
+    // =========================================================================
+    wire fft_start;
+    wire fft_busy, fft_done;
+
+    wire [ADDR_W-1:0] fft_mem_addr;
+    wire [CPU_DATA_W-1:0] fft_mem_wdata, mem_rdata;
+    wire fft_mem_we;
+
+    // Flattened FFT buses
+    wire signed [127:0] fft_in_re_flat;
+    wire signed [127:0] fft_in_im_flat;
+    wire signed [127:0] fft_out_re_flat;
+    wire signed [127:0] fft_out_im_flat;
+
+    fft8_core u_fft8 (
+        .clk(clk),
+        .reset(reset),
+        .start(fft_start),
+        .done(fft_done),
+        .in_re_flat(fft_in_re_flat),
+        .in_im_flat(fft_in_im_flat),
+        .out_re_flat(fft_out_re_flat),
+        .out_im_flat(fft_out_im_flat)
+    );
+
+    fft_fsm u_fft_fsm (
+        .clk(clk),
+        .reset(reset),
+        .start(FFTStart1),
+        .start_addr(rs1_data1),
+        .end_addr(rs2_data1),
+        .busy(fft_busy),
+        .done(fft_done),
+        .mem_rdata(mem_rdata),          // <- from Data_MEM
+        .mem_addr(fft_mem_addr),        // <- to MUX
+        .mem_wdata(fft_mem_wdata),      // <- to MUX
+        .mem_we(fft_mem_we),            // <- to MUX
+        .fft_start(fft_start),
+        .fft_done(fft_done),
+        .in_re_flat(fft_in_re_flat),
+        .in_im_flat(fft_in_im_flat),
+        .out_re_flat(fft_out_re_flat),
+        .out_im_flat(fft_out_im_flat)
+    );
+
+    */
+    // ============================================================
+    //                    FFT ACCELERATOR SECTION
+    // ============================================================
+
+    localparam FFT_DATA_W = 16;
+
+    // --- Wires from control units ---
+    wire FFTStart1, FFTStart2;  // From u_ctrl1 and u_ctrl2
+
+    // --- Internal FFT control signals ---
+    reg  fft_start;   // One-cycle pulse to fft8_core
+    reg  fft_busy;    // CPU stall flag during FFT operation
+
+    wire fft_done;    // Done flag from FFT core
+
+    // --- FFT Data (hardcoded, same as testbench) ---
+    wire signed [FFT_DATA_W*8-1:0] fft_in_re_flat = {
+        //impulse
+        //16'sd0, 16'sd0, 16'sd0, 16'sd0,
+        //16'sd0, 16'sd0, 16'sd0, 16'sd32767
+        //constant
+        //16'sd32767, 16'sd32767, 16'sd32767, 16'sd32767,
+        //16'sd32767, 16'sd32767, 16'sd32767, 16'sd32767
+        //cosine
+        16'sd32767, 16'sd23169, 16'sd0, -16'sd23169,
+        -16'sd32767, -16'sd23169, 16'sd0, 16'sd23169
+        //unit step
+        //16'sd32767, 16'sd32767, 16'sd32767, 16'sd32767,
+        //16'sd32767, 16'sd32767, 16'sd32767, 16'sd32767
+    };
+    wire signed [FFT_DATA_W*8-1:0] fft_in_im_flat = 128'd0;
+
+    wire signed [FFT_DATA_W*8-1:0] fft_out_re_flat;
+    wire signed [FFT_DATA_W*8-1:0] fft_out_im_flat;
+
+    // --- FFT Core Instance ---
+    fft8_core u_fft8 (
+        .clk(clk),
+        .reset(reset),
+        .start(fft_start),
+        .done(fft_done),
+        .in_re_flat(fft_in_re_flat),
+        .in_im_flat(fft_in_im_flat),
+        .out_re_flat(fft_out_re_flat),
+        .out_im_flat(fft_out_im_flat)
+    );
+
+    // ============================================================
+    //               FFT CONTROL AND STALL LOGIC
+    // ============================================================
+    always @(posedge clk) begin
+        if (reset) begin
+            fft_start <= 1'b0;
+            fft_busy  <= 1'b0;
+        end else begin
+            // Start FFT when custom instruction is issued
+            if (!fft_busy && (FFTStart1 || FFTStart2)) begin
+                fft_start <= 1'b1;  // Pulse start for 1 cycle
+                fft_busy  <= 1'b1;  // Stall CPU
+                $display("[%0t] FFT instruction detected — FFT started", $time);
+            end else begin
+                fft_start <= 1'b0;  // Clear after 1 cycle
+            end
+
+            // Release stall when FFT is done
+            if (fft_busy && fft_done) begin
+                fft_busy <= 1'b0;
+                $display("[%0t] FFT done — releasing CPU stall", $time);
+            end
+        end
+    end
+
+    // ============================================================
+    //               PC STALL INTEGRATION (important!)
+    // ============================================================
+    // Whenever PC updates or pipeline advances, gate with !fft_busy
+
+
+    wire pipeline_stall = stall_due_to_load_in_ex || stall_due_to_load_in_mem || fft_busy;
+
+    always @(posedge clk) begin
+        if (reset || control_flow_taken) begin
+            load_in_ex <= 1'b0;
+            load_in_mem <= 1'b0;
+            load_dest_ex <= 5'd0;
+            load_dest_mem <= 5'd0;
+        end else if (!pipeline_stall) begin
+            load_in_mem <= load_in_ex;
+            load_dest_mem <= load_dest_ex;
+            
+            if (fd_valid && (opcode1 == `OP_LOAD) && (rd1 != 5'd0)) begin
+                load_in_ex <= 1'b1;
+                load_dest_ex <= rd1;
+            end else begin
+                load_in_ex <= 1'b0;
+                load_dest_ex <= 5'd0;
+            end
+        end
+    end
+
+    wire raw_rs1 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs1_2) && !(opcode1 == `OP_LOAD);
+    wire raw_rs2 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs2_2) && !(opcode1 == `OP_LOAD);
+    wire raw_hazard = raw_rs1 || raw_rs2;
+    wire load_use_hazard_inst1_inst2 = fd_valid && (opcode1 == `OP_LOAD) && (rd1 != 5'd0) && 
+                                      ((rd1 == rs1_2 && rs1_2 != 5'd0) || (rd1 == rs2_2 && rs2_2 != 5'd0));
+    wire waw_hazard = (rd1 != 5'd0) && (rd1 == rd2) && RegWrite1 && RegWrite2;
+
+    wire is_mem1 = (opcode1 == `OP_LOAD) || (opcode1 == `OP_STORE);
+    wire is_mem2 = (opcode2 == `OP_LOAD) || (opcode2 == `OP_STORE);
+    wire is_control_flow1 = is_jal1 || is_jalr1 || (opcode1 == `OP_BRANCH);
+    wire is_control_flow2 = is_jal2 || is_jalr2 || (opcode2 == `OP_BRANCH);
+    wire blocks_superscalar = is_mem1 || is_mem2 || is_control_flow1 || is_control_flow2 || load_use_hazard_inst1_inst2;
+    wire issue_inst2 = ~raw_hazard && ~waw_hazard && ~blocks_superscalar && fd_valid && !pipeline_stall && !fft_busy;
+
+    // =========================================================================
+    // Instruction Name Decode
+    // =========================================================================
+    reg [8*8-1:0] inst1_name, inst2_name;
+    (* keep = "true" *) reg [8*8-1:0] inst1_name_reg, inst2_name_reg;
+    
+    always @(*) begin
+        inst1_name = "DECODE1?";
+        inst2_name = "DECODE2?";
+        
+        if (!fd_valid) 
+            inst1_name = "INVALID";
+        else if (fd_inst1 == 32'h00000013) 
+            inst1_name = "NOP";
+        else begin
+            case (opcode1)
+                `OP_LOAD: inst1_name = "LOAD";
+                `OP_STORE: inst1_name = "STORE";
+                `OP_BRANCH: inst1_name = (funct3_1 == 3'b000) ? "BEQ" : "BNE";
+                `OP_JAL: inst1_name = "JAL";
+                `OP_JALR: inst1_name = "JALR";
+                `OP_ITYPE: inst1_name = "ADDI";
+                `OP_RTYPE: inst1_name = (funct7_1 == 7'b0100000) ? "SUB" : "ADD";
+                `OP_LUI: inst1_name = "LUI";
+                `OP_AUIPC: inst1_name = "AUIPC";
+                `OP_CUSTOM0 :inst1_name = "FFT";
+                default: inst1_name = "???";
+            endcase
+        end
+        
+        if (!fd_valid) 
+            inst2_name = "INVALID";
+        else if (pipeline_stall || !issue_inst2) 
+            inst2_name = "STALLED";
+        else if (fd_inst2 == 32'h00000013) 
+            inst2_name = "NOP";
+        else begin
+            case (opcode2)
+                `OP_LOAD: inst2_name = "LOAD";
+                `OP_STORE: inst2_name = "STORE";
+                `OP_BRANCH: inst2_name = "BRANCH";
+                `OP_JAL: inst2_name = "JAL";
+                `OP_JALR: inst2_name = "JALR";
+                `OP_ITYPE: inst2_name = "ADDI";
+                `OP_RTYPE: inst2_name = "ADD";
+                `OP_LUI: inst2_name = "LUI";
+                `OP_AUIPC: inst2_name = "AUIPC";
+                `OP_CUSTOM0 :inst2_name = "FFT";
+                default: inst2_name = "???";
+            endcase
+        end
+    end
+    
+    always @(posedge clk) begin
+        if (reset) begin
+            inst1_name_reg <= "RESET   ";
+            inst2_name_reg <= "RESET   ";
+        end else begin
+            inst1_name_reg <= inst1_name;
+            inst2_name_reg <= inst2_name;
+        end
+    end
+
+    // =========================================================================
+    // Debug Registers
+    // =========================================================================
+    (* keep = "true" *) reg [ADDR_W-1:0] dbg_pc_reg;
+    (* keep = "true" *) reg dbg_issue_inst2_reg;
+    (* keep = "true" *) reg dbg_pipeline_stall_reg;
+    (* keep = "true" *) reg dbg_control_flow_reg;
+    
+    always @(posedge clk) begin
+        if (reset) begin
+            dbg_pc_reg <= 0;
+            dbg_issue_inst2_reg <= 0;
+            dbg_pipeline_stall_reg <= 0;
+            dbg_control_flow_reg <= 0;
+        end else begin
+            dbg_pc_reg <= fd_pc;
+            dbg_issue_inst2_reg <= issue_inst2;
+            dbg_pipeline_stall_reg <= pipeline_stall;
+            dbg_control_flow_reg <= control_flow_taken;
+        end
+    end
+
+    // =========================================================================
+    // Memory Stage 
+    // =========================================================================
+    wire [CPU_DATA_W-1:0] dmem_rdata;
+    wire [ADDR_W-1:0]     dmem_addr_mux;
+    wire [CPU_DATA_W-1:0] dmem_wdata_mux;
+    wire                   dmem_we_mux;
+
+    // Regular memory access from pipeline
+    assign dmem_addr_mux  = ex1_Y;                       // ALU result = address
+    assign dmem_wdata_mux = rs2_data1;                   // Store data
+    assign dmem_we_mux    = (MemWrite1 && is_mem1 && fd_valid);
+
+    // Instantiate Data Memory
+    Data_MEM u_dmem (
+        .clk(clk),
+        .reset(reset),
+        .write_en(dmem_we_mux),
+        .address(dmem_addr_mux),
+        .write_DAT(dmem_wdata_mux),
+        .read_DAT(dmem_rdata)
+    );
+
+    // Monitor writes (for debug)
+    always @(posedge clk) begin
+        if (dmem_we_mux)
+            $display("[%0t] DMEM_WRITE addr=%0d data=%h", $time, dmem_addr_mux, dmem_wdata_mux);
+    end
+
+
+    // =========================================================================
+    // Writeback Stage
+    // =========================================================================
+    wire [CPU_DATA_W-1:0] result1 = (is_jal1 || is_jalr1) ? link_addr1 : 
+                                    (MemToReg1 ? dmem_rdata : ex1_Y);
+    wire [CPU_DATA_W-1:0] result2 = ex2_Y;
+
+    always @(posedge clk) begin
+        if (reset) begin
+            wb_we1_reg <= 1'b0;
+            wb_we2_reg <= 1'b0;
+            wb_rd1_reg <= 5'd0;
+            wb_rd2_reg <= 5'd0;
+            wb_wdata1_reg <= 32'd0;
+            wb_wdata2_reg <= 32'd0;
+        end else begin
+            wb_we1_reg <= RegWrite1 && (rd1 != 5'd0) && fd_valid;
+            wb_rd1_reg <= rd1;
+            wb_wdata1_reg <= result1;
+            
+            wb_we2_reg <= issue_inst2 && RegWrite2 && (rd2 != 5'd0) && fd_valid;
+            wb_rd2_reg <= rd2;
+            wb_wdata2_reg <= result2;
+        end
+    end
+
+    // =========================================================================
+    // PC Update and Fetch Control
+    // =========================================================================
+    
+    reg fetch_stall;
+
+    always @(*) begin
+        fetch_stall = 1'b0;
+
+        if (reset)
+            pc_next = 32'd0;
+        else if (fft_busy)
+            pc_next = pc;  // <--- NEW: hold PC during FFT
+        else if (!fd_valid)
+            pc_next = pc;
+        else if (pipeline_stall) begin
+            pc_next = pc;
+            fetch_stall = 1'b0;
+        end else if (control_flow_taken) begin
+            if (is_jal1)
+                pc_next = jal_target1;
+            else if (is_jalr1)
+                pc_next = jalr_target1;
+            else
+                pc_next = branch_target1;
+            fetch_stall = 1'b0;
+        end else begin
+            if (issue_inst2) begin
+                pc_next = pc + 8;
+                fetch_stall = 1'b0;
+            end else begin
+                pc_next = pc + 4;
+                fetch_stall = 1'b1;
+            end
+        end
+    end
+
+    always @(posedge clk) begin
+        if (reset) begin
+            pc_reg <= 32'd0;
+            fd_pc <= 32'd0;
+            fd_inst1 <= 32'd0;
+            fd_inst2 <= 32'd0;
+            fd_valid <= 1'b0;
+        end else if (pipeline_stall) begin
+            // Freeze pipeline
+            pc_reg <= pc;
+            fd_pc <= fd_pc;
+            fd_inst1 <= fd_inst1;
+            fd_inst2 <= fd_inst2;
+            fd_valid <= fd_valid;
+        end else begin
+            pc_reg <= pc_next;
+            
+            if (!fd_valid) begin
+                fd_pc <= pc;
+                fd_inst1 <= inst1_f;
+                fd_inst2 <= inst2_f;
+                fd_valid <= 1'b1;
+            end else if (pipeline_stall) begin
+                // Insert bubble
+                fd_pc <= pc;
+                fd_inst1 <= 32'h00000013;
+                fd_inst2 <= 32'h00000013;
+                fd_valid <= 1'b1;
+            end else if (control_flow_taken) begin
+                fd_pc <= pc_next;
+                fd_inst1 <= 32'h00000013;
+                fd_inst2 <= 32'h00000013;
+                fd_valid <= 1'b1;
+            end else if (fetch_stall) begin
+                fd_pc <= pc_inst2;
+                fd_inst1 <= fd_inst2;
+                fd_inst2 <= inst2_f;
+                fd_valid <= 1'b1;
+            end else begin
+                fd_pc <= pc;
+                fd_inst1 <= inst1_f;
+                fd_inst2 <= inst2_f;
+                fd_valid <= 1'b1;
+            end
+        end
+    end
+
+    // =========================================================================
+    // Debug Output
+    // =========================================================================
+    always @(posedge clk) begin
+        if (!reset && fd_valid) begin
+            //$display("t=%0t PC=%0d [%s|%s] issue2=%b stall=%b", 
+             //        $time, dbg_pc_reg, inst1_name_reg, inst2_name_reg, 
+              //       dbg_issue_inst2_reg, dbg_pipeline_stall_reg);
+            
+            //if (wb_we1_reg) 
+            //    $display("  WB1: x%0d = 0x%h", wb_rd1_reg, wb_wdata1_reg);
+            //if (wb_we2_reg) 
+            //    $display("  WB2: x%0d = 0x%h", wb_rd2_reg, wb_wdata2_reg);
+
+            if (fft_start)
+                $display(">>> FFT started at t=%0t", $time);
+            if (fft_done)
+                $display("<<< FFT completed at t=%0t", $time);
+
+        end
+    end
+
+endmodule
+
+
+/*
+`timescale 1ns / 1ps
+`include "opcodes.vh"
+
 module cpu(
     input clk,
     input reset
@@ -11,17 +595,17 @@ module cpu(
     // =========================================================================
     reg [31:0] pc_reg;
     wire [31:0] pc = pc_reg;
+    wire [31:0] pc_plus_4 = pc + 32'd4;
     
     // =========================================================================
     // Fetch Stage  
     // =========================================================================
     wire [31:0] inst1_f, inst2_f;
-    wire [31:0] pc_plus_4 = pc + 32'd4;
     Inst_MEM u_Inst_MEM1(.address(pc), .inst(inst1_f));
     Inst_MEM u_Inst_MEM2(.address(pc_plus_4), .inst(inst2_f));
     
     // Fetch/Decode pipeline registers
-    reg [31:0] fd_pc; // <-- ADD THIS: Pipelined PC for fd_inst1
+    reg [31:0] fd_pc; // Pipelined PC (for fd_inst1)
     reg [31:0] fd_inst1, fd_inst2;
     reg fd_valid;
     
@@ -43,7 +627,603 @@ module cpu(
     wire [6:0] funct7_2 = fd_inst2[31:25];
 
     // Immediate generation (RISC-V correct encoding)
+    wire [31:0] imm_i1 = {{20{fd_inst1[31]}}, fd_inst1[31:20]};
+    wire [31:0] imm_i2 = {{20{fd_inst2[31]}}, fd_inst2[31:20]};
 
+    wire [31:0] imm_s1 = {{20{fd_inst1[31]}}, fd_inst1[31:25], fd_inst1[11:7]};
+    wire [31:0] imm_s2 = {{20{fd_inst2[31]}}, fd_inst2[31:25], fd_inst2[11:7]};
+
+    wire [31:0] imm_b1 = {{19{fd_inst1[31]}}, fd_inst1[31], fd_inst1[7],
+                        fd_inst1[30:25], fd_inst1[11:8], 1'b0};
+    wire [31:0] imm_b2 = {{19{fd_inst2[31]}}, fd_inst2[31], fd_inst2[7],
+                        fd_inst2[30:25], fd_inst2[11:8], 1'b0};
+
+    wire [31:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[31],
+                        fd_inst1[19:12], fd_inst1[20],
+                        fd_inst1[30:21], 1'b0};
+    wire [31:0] imm_j2 = {{11{fd_inst2[31]}}, fd_inst2[31],
+                        fd_inst2[19:12], fd_inst2[20],
+                        fd_inst2[30:21], 1'b0};
+
+    // Branch/Jump targets
+    wire [31:0] pc_inst1 = fd_pc;
+    wire [31:0] pc_inst2 = fd_pc + 32'd4;
+    
+    wire [31:0] jal_target1 = pc_inst1 + imm_j1;
+    wire [31:0] jal_target2 = pc_inst2 + imm_j2;
+    wire [31:0] branch_target1 = pc_inst1 + imm_b1;
+    
+    // =========================================================================
+    // Control Signals
+    // =========================================================================
+    wire RegWrite1, MemRead1, MemWrite1, MemToReg1, ALUSrc1, Branch1;
+    wire RegWrite2, MemRead2, MemWrite2, MemToReg2, ALUSrc2, Branch2;
+
+    control_unit u_ctrl1 (
+        .opcode(opcode1),
+        .RegWrite(RegWrite1),
+        .MemRead(MemRead1),
+        .MemWrite(MemWrite1),
+        .MemToReg(MemToReg1),
+        .ALUSrc(ALUSrc1),
+        .Branch(Branch1)
+    );
+
+    control_unit u_ctrl2 (
+        .opcode(opcode2),
+        .RegWrite(RegWrite2),
+        .MemRead(MemRead2),
+        .MemWrite(MemWrite2),
+        .MemToReg(MemToReg2),
+        .ALUSrc(ALUSrc2),
+        .Branch(Branch2)
+    );
+
+    wire [4:0] alu_ctrl1, alu_ctrl2;
+    alu_control u_alu_ctrl1 (
+        .opcode(opcode1),
+        .funct3(funct3_1),
+        .funct7(funct7_1),
+        .ctrl(alu_ctrl1)
+    );
+
+    alu_control u_alu_ctrl2 (
+        .opcode(opcode2),
+        .funct3(funct3_2),
+        .funct7(funct7_2),
+        .ctrl(alu_ctrl2)
+    );
+
+    // =========================================================================
+    // Register File
+    // =========================================================================
+    wire [31:0] rs1_data1, rs2_data1, rs1_data2, rs2_data2;
+    
+    register_file_dual u_regfile (
+        .clk(clk),
+        .reset(reset),
+        .we1(wb_we1),
+        .we2(wb_we2),
+        .rs1_1(rs1_1),
+        .rs2_1(rs2_1),
+        .rs1_2(rs1_2),
+        .rs2_2(rs2_2),
+        .rd1(wb_rd1),
+        .rd2(wb_rd2),
+        .wdata1(wb_wdata1),
+        .wdata2(wb_wdata2),
+        .rdata1_1(rs1_data1),
+        .rdata2_1(rs2_data1),
+        .rdata1_2(rs1_data2),
+        .rdata2_2(rs2_data2)
+    );
+
+    // =========================================================================
+    // <<< MOVED DECLARATIONS HERE (Before Hazard Detection) >>>
+    // Forwarding logic needs results (ex1_Y) calculated here now
+    // Execute Stage Results (needed for forwarding & writeback)
+    // =========================================================================
+    wire [31:0] alu_Y1, alu_Y2;
+    // ALU inputs defined later after forwarding logic
+    wire forward_rs1_2; // Declare forward signals early
+    wire forward_rs2_2;
+    wire [31:0] ex1_Y; // Declare result signal early
+    wire [31:0] rs1_data2_fwd = forward_rs1_2 ? ex1_Y : rs1_data2;
+    wire [31:0] rs2_data2_fwd = forward_rs2_2 ? ex1_Y : rs2_data2; // Corrected width
+    
+    wire [31:0] alu_B1 = ALUSrc1 ? ((opcode1 == `OP_STORE) ? imm_s1 : imm_i1) : rs2_data1;
+    wire [31:0] alu_B2 = ALUSrc2 ? ((opcode2 == `OP_STORE) ? imm_s2 : imm_i2) : rs2_data2_fwd;
+
+    ALU u_alu1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(alu_Y1));
+    ALU u_alu2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(alu_Y2));
+    
+    assign ex1_Y = alu_Y1; // Assign result signal
+    wire [31:0] ex2_Y = alu_Y2; // Local wire ok
+
+    // Forwarding logic calculation
+    assign forward_rs1_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs1_2) && !MemToReg1;
+    assign forward_rs2_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_2) && !MemToReg1;
+
+
+    // JAL/JALR Signals (needed for control_flow_taken)
+    wire is_jal1 = (opcode1 == `OP_JAL);
+    wire is_jalr1 = (opcode1 == `OP_JALR);
+    wire is_jal2 = (opcode2 == `OP_JAL); 
+    wire is_jalr2 = (opcode2 == `OP_JALR); 
+    
+    wire [31:0] link_addr1 = pc_inst1 + 32'd4;
+    wire [31:0] link_addr2 = pc_inst2 + 32'd4;
+    
+    wire [31:0] jalr_target1 = (rs1_data1 + imm_i1) & ~32'd1;
+
+    // Branch Logic (needed for control_flow_taken)
+    wire branch_taken1 = (opcode1 == `OP_BRANCH) && (
+        (funct3_1 == 3'b000 && rs1_data1 == rs2_data1) ||  // BEQ
+        (funct3_1 == 3'b001 && rs1_data1 != rs2_data1)     // BNE
+        // Add other branch types here if implemented
+    );
+    // =========================================================================
+
+    // =========================================================================
+    // Hazard Detection
+    // =========================================================================
+    wire is_mem1 = (opcode1 == `OP_LOAD) || (opcode1 == `OP_STORE);
+    wire is_mem2 = (opcode2 == `OP_LOAD) || (opcode2 == `OP_STORE);
+    
+    // Track if there's a load in flight (in EX/MEM stage)
+    reg load_in_ex;        
+    reg load_in_mem;       
+    reg [4:0] load_dest_ex;
+    reg [4:0] load_dest_mem;
+    
+    // Control flow instruction check (used later)
+    wire is_control_flow1 = is_jal1 || is_jalr1 || (opcode1 == `OP_BRANCH); // Use already declared signals
+    wire is_control_flow2 = is_jal2 || is_jalr2 || (opcode2 == `OP_BRANCH); // Use already declared signals
+
+    // Signal used for flushing hazard tracking and pipeline
+    wire control_flow_taken = (is_jal1 || is_jalr1 || branch_taken1) && fd_valid; 
+
+    // Load-use hazard: instruction in decode reads register that a load (in EX or MEM stage) will write
+    wire load_use_rs1_ex_hazard = load_in_ex && (load_dest_ex == rs1_1) && (rs1_1 != 5'd0);
+    wire load_use_rs2_ex_hazard = load_in_ex && (load_dest_ex == rs2_1) && (rs2_1 != 5'd0);
+    wire load_use_rs1_mem_hazard = load_in_mem && (load_dest_mem == rs1_1) && (rs1_1 != 5'd0);
+    wire load_use_rs2_mem_hazard = load_in_mem && (load_dest_mem == rs2_1) && (rs2_1 != 5'd0);
+    
+    // Original load hazard detection (based on EX/MEM stages)
+    wire load_use_hazard_detected = (load_use_rs1_ex_hazard || load_use_rs2_ex_hazard || 
+                                     load_use_rs1_mem_hazard || load_use_rs2_mem_hazard) && fd_valid;
+
+    // Anticipate hazard between inst1 (load) and inst2 in Decode stage
+    wire load_use_hazard_decode_stage = fd_valid && (opcode1 == `OP_LOAD) && (rd1 != 5'd0) &&
+                                        ( (rd1 == rs1_2 && rs1_2 != 5'd0) || (rd1 == rs2_2 && rs2_2 != 5'd0) ); // Ensure non-zero registers
+
+    // Combine current detection with anticipation
+    wire load_use_hazard_detected_combined = load_use_hazard_detected || load_use_hazard_decode_stage;
+
+    // Signal to determine if the pipeline should stall completely
+    wire pipeline_stall = load_use_hazard_detected_combined; 
+
+    // === REVISED Hazard Tracking Logic ===
+    always @(posedge clk) begin
+        if (reset || control_flow_taken) begin
+            load_in_ex <= 1'b0;
+            load_in_mem <= 1'b0;
+            load_dest_ex <= 5'd0;
+            load_dest_mem <= 5'd0;
+        // Advance hazard tracking ONLY if the pipeline is NOT stalled
+        end else if (!pipeline_stall) begin 
+            // Shift state: EX -> MEM
+            load_in_mem <= load_in_ex;
+            load_dest_mem <= load_dest_ex;
+            // Check instruction ENTERING EX (which is fd_inst1 from the *previous* cycle, 
+            // but since fd_valid is checked here, it reflects the instruction just decoded)
+            if (fd_valid && (opcode1 == `OP_LOAD) && (rd1 != 5'd0)) begin
+                load_in_ex <= 1'b1;
+                load_dest_ex <= rd1;
+            end else begin
+                load_in_ex <= 1'b0;
+                load_dest_ex <= 5'd0;
+            end
+        // During a stall, the instruction in EX moves to MEM, and nothing new enters EX
+        end else begin 
+            load_in_mem <= load_in_ex; // EX moves to MEM
+            load_dest_mem <= load_dest_ex;
+            load_in_ex <= 1'b0; // EX becomes empty/idle as Decode is frozen
+            load_dest_ex <= 5'd0;
+        end
+    end
+                                     
+    // RAW hazard: inst2 reads register that inst1 writes (non-load)
+    wire raw_rs1 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs1_2) && !(opcode1 == `OP_LOAD); 
+    wire raw_rs2 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs2_2) && !(opcode1 == `OP_LOAD); 
+    wire raw_hazard = raw_rs1 || raw_rs2;
+    
+    // Load-use hazard specifically between inst1(LOAD) and inst2 in the same decode cycle
+    // Use the decode stage detection wire here
+    wire load_use_hazard_inst1_inst2 = load_use_hazard_decode_stage; 
+
+    // WAW hazard
+    wire waw_hazard = (rd1 != 5'd0) && (rd1 == rd2) && RegWrite1 && RegWrite2;
+    
+    // Blocking conditions for issuing instruction 2
+    wire blocks_superscalar = is_mem1 || is_mem2 || is_control_flow1 || is_control_flow2 || load_use_hazard_inst1_inst2;
+    
+    // Issue logic for instruction 2
+    // Must NOT issue inst2 if there's a pipeline stall
+    wire issue_inst2 = ~raw_hazard && ~waw_hazard && ~blocks_superscalar && fd_valid && !pipeline_stall; 
+
+    // =========================================================================
+    // Instruction Name Decode (for waveform viewing)
+    // =========================================================================
+    reg [8*8-1:0] inst1_name;
+    reg [8*8-1:0] inst2_name;
+    
+    (* keep = "true" *) (* mark_debug = "true" *) reg [8*8-1:0] inst1_name_reg;
+    (* keep = "true" *) (* mark_debug = "true" *) reg [8*8-1:0] inst2_name_reg;
+    
+    always @(*) begin
+        inst1_name = "DECODE1?";
+        inst2_name = "DECODE2?";
+
+        // Decode inst1
+        if (!fd_valid) begin
+            inst1_name = "INVALID";
+        end else if (fd_inst1 == 32'h00000013) begin
+            inst1_name = "NOP";
+        end else begin
+            case (opcode1)
+                `OP_LOAD: inst1_name = "LOAD"; 
+                `OP_STORE: inst1_name = "STORE";
+                `OP_BRANCH: begin
+                    case (funct3_1)
+                        3'b000: inst1_name = "BEQ";
+                        3'b001: inst1_name = "BNE";
+                        default: inst1_name = "BRANCH?";
+                    endcase
+                end
+                `OP_JAL: inst1_name = "JAL";
+                `OP_JALR: inst1_name = "JALR";
+                `OP_ITYPE: begin
+                    case (funct3_1)
+                        3'b000: inst1_name = "ADDI";
+                        3'b010: inst1_name = "SLTI";
+                        3'b011: inst1_name = "SLTIU";
+                        3'b100: inst1_name = "XORI";
+                        3'b110: inst1_name = "ORI";
+                        3'b111: inst1_name = "ANDI";
+                        default: inst1_name = "ITYPE?";
+                    endcase
+                end
+                `OP_RTYPE: begin
+                    case (funct3_1)
+                        3'b000: inst1_name = (funct7_1 == 7'b0100000) ? "SUB" : "ADD";
+                        default: inst1_name = "RTYPE";
+                    endcase
+                end
+                `OP_LUI: inst1_name = "LUI";
+                `OP_AUIPC: inst1_name = "AUIPC";
+                default: inst1_name = "???";
+            endcase
+        end
+
+        // Decode inst2
+        if (!fd_valid) begin
+            inst2_name = "INVALID";
+        // If pipeline is stalled, inst2 is effectively stalled regardless of issue_inst2 signal
+        end else if (pipeline_stall) begin 
+            inst2_name = "STALLED";
+        end else if (!issue_inst2) begin
+            inst2_name = "STALLED"; 
+        end else if (fd_inst2 == 32'h00000013) begin
+            inst2_name = "NOP";
+        end else begin
+            case (opcode2)
+                `OP_LOAD: inst2_name = "LOAD";
+                `OP_STORE: inst2_name = "STORE";
+                `OP_BRANCH: inst2_name = "BRANCH";
+                `OP_JAL: inst2_name = "JAL";
+                `OP_JALR: inst2_name = "JALR";
+                `OP_ITYPE: begin
+                    case (funct3_2)
+                        3'b000: inst2_name = "ADDI";
+                        3'b010: inst2_name = "SLTI";
+                        3'b011: inst2_name = "SLTIU";
+                        3'b100: inst2_name = "XORI";
+                        3'b110: inst2_name = "ORI";
+                        3'b111: inst2_name = "ANDI";
+                        default: inst2_name = "ITYPE?";
+                    endcase
+                end
+                `OP_RTYPE: begin
+                    case (funct3_2)
+                        3'b000: inst2_name = (funct7_2 == 7'b0100000) ? "SUB" : "ADD";
+                        default: inst2_name = "RTYPE";
+                    endcase
+                end
+                `OP_LUI: inst2_name = "LUI";
+                `OP_AUIPC: inst2_name = "AUIPC";
+                default: inst2_name = "???";
+            endcase
+        end
+    end
+    
+    // Register instruction names for waveform viewing
+    always @(posedge clk) begin
+        if (reset) begin
+            inst1_name_reg <= "RESET   ";
+            inst2_name_reg <= "RESET   ";
+        end else begin
+            inst1_name_reg <= inst1_name;
+            inst2_name_reg <= inst2_name;
+        end
+    end
+
+    // =========================================================================
+    // Additional Debug Registers
+    // =========================================================================
+    (* keep = "true" *) reg [31:0] dbg_pc_reg;
+    (* keep = "true" *) reg dbg_issue_inst2_reg;
+    (* keep = "true" *) reg dbg_load_use_stall_reg;
+    (* keep = "true" *) reg dbg_control_flow_reg;
+    (* keep = "true" *) reg dbg_load_in_ex_reg; // Debug register for hazard signal
+    (* keep = "true" *) reg [4:0] dbg_load_dest_ex_reg; // Debug register for hazard signal
+    (* keep = "true" *) reg dbg_load_in_mem_reg; // Debug register for hazard signal
+    (* keep = "true" *) reg [4:0] dbg_load_dest_mem_reg; // Debug register for hazard signal
+    (* keep = "true" *) reg dbg_hazard_detected_reg; // Debug register for hazard signal
+    (* keep = "true" *) reg dbg_hazard_decode_stage_reg; // Debug register for hazard signal
+
+
+    always @(posedge clk) begin
+        if (reset) begin
+            dbg_pc_reg <= 0;
+            dbg_issue_inst2_reg <= 0;
+            dbg_load_use_stall_reg <= 0;
+            dbg_control_flow_reg <= 0;
+            dbg_load_in_ex_reg <= 0; // Reset debug hazard signals
+            dbg_load_dest_ex_reg <= 0;
+            dbg_load_in_mem_reg <= 0;
+            dbg_load_dest_mem_reg <= 0;
+            dbg_hazard_detected_reg <= 0;
+            dbg_hazard_decode_stage_reg <= 0;
+        end else begin
+            dbg_pc_reg <= fd_pc; // Latch fd_pc for debug alignment
+            dbg_issue_inst2_reg <= issue_inst2;
+            dbg_load_use_stall_reg <= pipeline_stall; // Use the final stall signal
+            dbg_control_flow_reg <= control_flow_taken; // Use the actual taken signal
+            // Latch hazard detection signals for easier viewing
+            dbg_load_in_ex_reg <= load_in_ex; 
+            dbg_load_dest_ex_reg <= load_dest_ex;
+            dbg_load_in_mem_reg <= load_in_mem;
+            dbg_load_dest_mem_reg <= load_dest_mem;
+            dbg_hazard_detected_reg <= load_use_hazard_detected;
+            dbg_hazard_decode_stage_reg <= load_use_hazard_decode_stage;
+        end
+    end
+
+    // =========================================================================
+    // Execute Stage (Original position - now only forwarding logic here)
+    // =========================================================================
+    // Forwarding logic handled earlier with moved ALU block
+
+    // =========================================================================
+    // Memory Stage
+    // =========================================================================
+    wire [31:0] mem_rdata;
+    wire [31:0] mem_addr = ex1_Y; // Address comes from ALU result (for LW/SW)
+    wire [31:0] mem_wdata = rs2_data1; // Data to write comes from rs2
+    wire mem_we = MemWrite1 && is_mem1; // Write enable only for STORE type
+    
+    Data_MEM u_dmem (
+        .clk(clk),
+        .reset(reset),
+        .write_en(mem_we),
+        .address(mem_addr),
+        .write_DAT(mem_wdata),
+        .read_DAT(mem_rdata)
+    );
+
+    // =========================================================================
+    // Writeback Stage
+    // =========================================================================
+    reg wb_we1, wb_we2;
+    reg [4:0] wb_rd1, wb_rd2;
+    reg [31:0] wb_wdata1, wb_wdata2;
+    
+    // Determine the result to write back for inst1
+    wire [31:0] result1 = (is_jal1 || is_jalr1) ? link_addr1 : (MemToReg1 ? mem_rdata : ex1_Y);
+    
+    // Determine the result to write back for inst2
+    wire [31:0] result2 = ex2_Y; // Only ALU result possible for inst2
+    
+    always @(posedge clk) begin
+        if (reset) begin
+            wb_we1 <= 1'b0;
+            wb_we2 <= 1'b0;
+            wb_rd1 <= 5'd0;
+            wb_rd2 <= 5'd0;
+            wb_wdata1 <= 32'd0;
+            wb_wdata2 <= 32'd0;
+        end else begin
+            // Writeback depends on the instruction that *was* in Decode before the clock edge
+            // Need pipelined control signals for perfect accuracy, but using Decode stage
+            // signals directly is a common simplification (assuming 1 cycle EX/MEM)
+            wb_we1 <= RegWrite1 && (rd1 != 5'd0) && fd_valid; 
+            wb_rd1 <= rd1;
+            wb_wdata1 <= result1;
+            
+            wb_we2 <= issue_inst2 && RegWrite2 && (rd2 != 5'd0) && fd_valid; 
+            wb_rd2 <= rd2;
+            wb_wdata2 <= result2;
+        end
+    end
+
+    // =========================================================================
+    // PC Update and Fetch Control
+    // =========================================================================
+    reg [31:0] pc_next;
+    reg fetch_stall; // Indicates only inst1 issued, need to slide inst2->inst1
+    // wire pipeline_stall; // Defined earlier
+    
+    // control_flow_taken defined earlier using moved signals
+    
+    // Determine if the pipeline needs a full stall
+    // assign pipeline_stall = load_use_hazard_detected_combined; // Defined earlier
+    
+    always @(*) begin
+        fetch_stall = 1'b0; // Default: assume superscalar or flush/stall
+        
+        if (reset) begin
+            pc_next = 32'd0;
+        end else if (!fd_valid) begin
+            pc_next = pc; 
+        // === HIGHEST PRIORITY: Load-use stall ===
+        end else if (pipeline_stall) begin // Uses combined signal
+            pc_next = pc; // Hold the PC
+            fetch_stall = 1'b0; // It's a full pipeline stall
+        // === Next Priority: Taken control flow ===
+        end else if (control_flow_taken) begin 
+            // Target PC is calculated based on type (using signals declared earlier)
+            if (is_jal1)      pc_next = jal_target1;
+            else if (is_jalr1) pc_next = jalr_target1;
+            else              pc_next = branch_target1; // branch_taken1 is true
+            fetch_stall = 1'b0; // Flush handles this
+        // === Default: Advance PC ===
+        end else begin
+            if (issue_inst2) begin
+                pc_next = pc + 8; // Advance by 2 instructions
+                fetch_stall = 1'b0; 
+            end else begin
+                pc_next = pc + 4; // Advance by 1 instruction
+                fetch_stall = 1'b1; // Signal that inst2 needs to slide into inst1 slot
+            end
+        end
+    end
+    
+    // Pipeline Register Updates (FD Stage)
+    always @(posedge clk) begin
+        if (reset) begin
+            pc_reg <= 32'd0;
+            fd_pc <= 32'd0;
+            fd_inst1 <= 32'd0;
+            fd_inst2 <= 32'd0;
+            fd_valid <= 1'b0;
+        // === CHECK FOR FULL PIPELINE STALL FIRST ===
+        end else if (pipeline_stall) begin // Uses combined signal
+            // FREEZE PC and FD registers
+            pc_reg <= pc; // Explicitly hold PC reg
+            fd_pc <= fd_pc; // Hold pipelined PC
+            fd_inst1 <= fd_inst1; // Hold instruction 1
+            fd_inst2 <= fd_inst2; // Hold instruction 2
+            fd_valid <= fd_valid; // Keep valid state
+        // === If not stalled, proceed with normal updates ===
+        end else begin 
+            // Update PC to the calculated next value
+            pc_reg <= pc_next; 
+            
+            // Update FD registers based on state
+            if (!fd_valid) begin // Initial fetch
+                fd_pc <= pc;
+                fd_inst1 <= inst1_f;
+                fd_inst2 <= inst2_f;
+                fd_valid <= 1'b1;
+            end else if (control_flow_taken) begin // Flush
+                fd_pc <= pc_next; // NOPs are at the target PC
+                fd_inst1 <= 32'h00000013; // NOP
+                fd_inst2 <= 32'h00000013; // NOP
+                fd_valid <= 1'b1; 
+            end else if (fetch_stall) begin // Slide inst2 -> inst1
+                fd_pc <= pc + 4; // PC for the instruction that was fd_inst2 (relative to old pc)
+                fd_inst1 <= fd_inst2;
+                fd_inst2 <= inst2_f; // Fetch new inst2 from pc+4 (relative to old pc)
+                fd_valid <= 1'b1;
+            end else begin // Normal superscalar fetch
+                fd_pc <= pc; // PC for new inst1
+                fd_inst1 <= inst1_f;
+                fd_inst2 <= inst2_f;
+                fd_valid <= 1'b1;
+            end
+        end // End else (!pipeline_stall)
+    end // End always @(posedge clk)
+
+    // =========================================================================
+    // Debug Output (ADDED HAZARD SIGNALS)
+    // =========================================================================
+    always @(posedge clk) begin
+         if (!reset && fd_valid) begin // Check fd_valid before displaying names
+            // Use combinatorial signals for current PC, names, issue, stall status
+            $display("t=%0t PC=%0d [%s|%s] issue2=%b pipeline_stall=%b",
+                     $time, fd_pc, inst1_name, inst2_name, issue_inst2, pipeline_stall);
+
+            // Display hazard tracking state *before* the clock edge (using registered dbg signals is correct here)
+            $display("  Hazard State (Regs): LoadEX=%b(x%0d), LoadMEM=%b(x%0d)",
+                     dbg_load_in_ex_reg, dbg_load_dest_ex_reg, dbg_load_in_mem_reg, dbg_load_dest_mem_reg);
+            // Display combinatorial hazard signals for current cycle
+            $display("  Hazard Signals (Comb): Detect=%b, DecodeStage=%b, CombinedStall=%b",
+                     load_use_hazard_detected, load_use_hazard_decode_stage, pipeline_stall);
+             // Use combinatorial signals for current decode cycle display - Shows what is being evaluated NOW
+            $display("  Inst1 Decode: op=%h rd=%d rs1=%d rs2=%d | Inst2 Decode: op=%h rd=%d rs1=%d rs2=%d",
+                     opcode1, rd1, rs1_1, rs2_1, opcode2, rd2, rs1_2, rs2_2);
+
+            if (wb_we1)
+                $display("  WB1: x%0d = 0x%h (%0d)", wb_rd1, wb_wdata1, wb_wdata1);
+            if (wb_we2)
+                $display("  WB2: x%0d = 0x%h (%0d)", wb_rd2, wb_wdata2, wb_wdata2);
+
+        end else if (!reset) begin
+             $display("t=%0t PC=%0d [INVALID|INVALID] Pipeline not valid.", $time, pc_reg);
+        end
+    end
+
+endmodule
+
+
+
+/*
+`timescale 1ns / 1ps
+`include "opcodes.vh"
+
+module cpu(
+    input clk,
+    input reset
+);
+
+    // =========================================================================
+    // PC Stage
+    // =========================================================================
+    reg [31:0] pc_reg;
+    wire [31:0] pc = pc_reg;
+    wire [31:0] pc_plus_4 = pc + 32'd4;
+    
+    // =========================================================================
+    // Fetch Stage  
+    // =========================================================================
+    wire [31:0] inst1_f, inst2_f;
+    Inst_MEM u_Inst_MEM1(.address(pc), .inst(inst1_f));
+    Inst_MEM u_Inst_MEM2(.address(pc_plus_4), .inst(inst2_f));
+    
+    // Fetch/Decode pipeline registers
+    reg [31:0] fd_pc; // Pipelined PC (for fd_inst1)
+    reg [31:0] fd_inst1, fd_inst2;
+    reg fd_valid;
+    
+    // =========================================================================
+    // Decode Stage (uses fd_inst1, fd_inst2)
+    // =========================================================================
+    wire [6:0] opcode1 = fd_inst1[6:0];
+    wire [4:0] rd1 = fd_inst1[11:7];
+    wire [2:0] funct3_1 = fd_inst1[14:12];
+    wire [4:0] rs1_1 = fd_inst1[19:15];
+    wire [4:0] rs2_1 = fd_inst1[24:20];
+    wire [6:0] funct7_1 = fd_inst1[31:25];
+
+    wire [6:0] opcode2 = fd_inst2[6:0];
+    wire [4:0] rd2 = fd_inst2[11:7];
+    wire [2:0] funct3_2 = fd_inst2[14:12];
+    wire [4:0] rs1_2 = fd_inst2[19:15];
+    wire [4:0] rs2_2 = fd_inst2[24:20];
+    wire [6:0] funct7_2 = fd_inst2[31:25];
+
+    // Immediate generation (RISC-V correct encoding)
     // I-type: [31:20]
     wire [31:0] imm_i1 = {{20{fd_inst1[31]}}, fd_inst1[31:20]};
     wire [31:0] imm_i2 = {{20{fd_inst2[31]}}, fd_inst2[31:20]};
@@ -59,7 +1239,6 @@ module cpu(
                         fd_inst2[30:25], fd_inst2[11:8], 1'b0};
 
     // J-type: [31 | 19:12 | 20 | 30:21 | 0]
-    // Corrected format: {sign_ext[31:21], imm[20], imm[19:12], imm[11], imm[10:1], imm[0]}
     wire [31:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[31],
                         fd_inst1[19:12], fd_inst1[20],
                         fd_inst1[30:21], 1'b0};
@@ -69,11 +1248,11 @@ module cpu(
 
     // Branch/Jump targets
     // Use the pipelined PC 'fd_pc' which corresponds to fd_inst1
-    wire [31:0] pc_inst1 = fd_pc; // <-- CHANGE THIS (was 'pc')
+    wire [31:0] pc_inst1 = fd_pc;
     wire [31:0] pc_inst2 = fd_pc + 32'd4;
     
     wire [31:0] jal_target1 = pc_inst1 + imm_j1;
-    wire [31:0] jal_target2 = pc_inst2 + imm_j2; // Fixed base address
+    wire [31:0] jal_target2 = pc_inst1 + imm_j2; // Note: JAL2 target would be from pc_inst2
     wire [31:0] branch_target1 = pc_inst1 + imm_b1;
     
     // =========================================================================
@@ -169,6 +1348,112 @@ module cpu(
     wire issue_inst2 = ~load_use_hazard && ~waw_hazard && ~blocks_superscalar && fd_valid;
 
     // =========================================================================
+    // <<< NEW DEBUG LOGIC START >>>
+    // =========================================================================
+    reg [8*8:1] inst1_name ; // Try alternative keep style
+    reg [8*8:1] inst2_name ; // Try alternative keep style
+    // (* keep = "true" *) reg [8*8:1] inst1_name; // Keep this one too, just in case
+    // (* keep = "true" *) reg [8*8:1] inst2_name; 
+
+    always @(*) begin
+        // Default assignment (optional, but can help ensure it's always driven)
+        inst1_name = "DECODE1?";
+        inst2_name = "DECODE2?";
+
+        // Decode for inst1_name
+        if (!fd_valid) begin
+            inst1_name = "INVALID";
+        end else if (fd_inst1 == 32'h00000013) begin // NOP
+            inst1_name = "NOP";
+        end else begin
+            case (opcode1)
+                `OP_LOAD: inst1_name = "LOAD"; 
+                `OP_STORE: inst1_name = "STORE";
+                `OP_BRANCH: begin
+                    case (funct3_1)
+                        3'b000: inst1_name = "BEQ";
+                        3'b001: inst1_name = "BNE";
+                        default: inst1_name = "BRANCH?";
+                    endcase
+                end
+                `OP_JAL: inst1_name = "JAL";
+                `OP_JALR: inst1_name = "JALR";
+                `OP_ITYPE: begin // Use OP_ITYPE from opcodes.vh
+                    case (funct3_1)
+                        3'b000: inst1_name = "ADDI";
+                        3'b010: inst1_name = "SLTI";
+                        3'b011: inst1_name = "SLTIU";
+                        3'b100: inst1_name = "XORI";
+                        3'b110: inst1_name = "ORI";
+                        3'b111: inst1_name = "ANDI";
+                        default: inst1_name = "ITYPE?"; // Changed default name slightly
+                    endcase
+                end
+                `OP_RTYPE: begin // Use OP_RTYPE from opcodes.vh
+                    case (funct3_1)
+                        3'b000: begin
+                            if (funct7_1 == 7'b0100000)
+                                inst1_name = "SUB";
+                            else
+                                inst1_name = "ADD";
+                        end
+                        // Add other R-type ops if needed
+                        default: inst1_name = "RTYPE"; // Changed default name slightly
+                    endcase
+                end
+                `OP_LUI: inst1_name = "LUI";
+                `OP_AUIPC: inst1_name = "AUIPC";
+                default: inst1_name = "???";
+            endcase
+        end
+
+        // Decode for inst2_name
+        if (!fd_valid) begin
+            inst2_name = "INVALID";
+        end else if (!issue_inst2) begin
+             inst2_name = "STALLED"; 
+        end else if (fd_inst2 == 32'h00000013) begin
+            inst2_name = "NOP";
+        end else begin
+            case (opcode2)
+                `OP_LOAD: inst2_name = "LOAD";
+                `OP_STORE: inst2_name = "STORE";
+                `OP_BRANCH: inst2_name = "BRANCH";
+                `OP_JAL: inst2_name = "JAL";
+                `OP_JALR: inst2_name = "JALR";
+                `OP_ITYPE: begin // Use OP_ITYPE from opcodes.vh
+                    case (funct3_2)
+                        3'b000: inst2_name = "ADDI";
+                        3'b010: inst2_name = "SLTI";
+                        3'b011: inst2_name = "SLTIU";
+                        3'b100: inst2_name = "XORI";
+                        3'b110: inst2_name = "ORI";
+                        3'b111: inst2_name = "ANDI";
+                        default: inst2_name = "ITYPE?"; // Changed default name slightly
+                    endcase
+                end
+                `OP_RTYPE: begin // Use OP_RTYPE from opcodes.vh
+                    case (funct3_2)
+                        3'b000: begin
+                            if (funct7_2 == 7'b0100000)
+                                inst2_name = "SUB";
+                            else
+                                inst2_name = "ADD";
+                        end
+                        default: inst2_name = "RTYPE"; // Changed default name slightly
+                    endcase
+                end
+                `OP_LUI: inst2_name = "LUI";
+                `OP_AUIPC: inst2_name = "AUIPC";
+                default: inst2_name = "???";
+            endcase
+        end
+    end // End always@(*)
+    // =========================================================================
+    // <<< NEW DEBUG LOGIC END >>>
+    // =========================================================================
+
+    // =========================================================================
     // Execute Stage
     // =========================================================================
     // EX-EX forwarding
@@ -176,24 +1461,29 @@ module cpu(
     wire forward_rs2_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_2) && !MemToReg1;
     
     wire [31:0] rs1_data2_fwd = forward_rs1_2 ? ex1_Y : rs1_data2;
-    wire [32:0] rs2_data2_fwd = forward_rs2_2 ? ex1_Y : rs2_data2;
+    wire [31:0] rs2_data2_fwd = forward_rs2_2 ? ex1_Y : rs2_data2; // Corrected width
     
     wire [31:0] alu_B1 = ALUSrc1 ? ((opcode1 == `OP_STORE) ? imm_s1 : imm_i1) : rs2_data1;
     wire [31:0] alu_B2 = ALUSrc2 ? ((opcode2 == `OP_STORE) ? imm_s2 : imm_i2) : rs2_data2_fwd;
     
-    wire [31:0] alu_Y1, alu_Y2, mac_Y1, mac_Y2;
+    wire [31:0] alu_Y1, alu_Y2; 
+    // Remove MAC instances if not used/defined
+    // wire [31:0] mac_Y1, mac_Y2; 
     
     ALU u_alu1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(alu_Y1));
-    MAC u_mac1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(mac_Y1));
+    // MAC u_mac1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(mac_Y1));
     
     ALU u_alu2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(alu_Y2));
-    MAC u_mac2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(mac_Y2));
+    // MAC u_mac2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(mac_Y2));
     
-    wire uses_mac1 = (alu_ctrl1 >= 5'd10 && alu_ctrl1 <= 5'd13);
-    wire uses_mac2 = (alu_ctrl2 >= 5'd10 && alu_ctrl2 <= 5'd13);
+    // Remove MAC logic if MAC unit is not present
+    // wire uses_mac1 = (alu_ctrl1 >= 5'd10 && alu_ctrl1 <= 5'd13);
+    // wire uses_mac2 = (alu_ctrl2 >= 5'd10 && alu_ctrl2 <= 5'd13);
     
-    wire [31:0] ex1_Y = uses_mac1 ? mac_Y1 : alu_Y1;
-    wire [31:0] ex2_Y = uses_mac2 ? mac_Y2 : alu_Y2;
+    // wire [31:0] ex1_Y = uses_mac1 ? mac_Y1 : alu_Y1;
+    // wire [31:0] ex2_Y = uses_mac2 ? mac_Y2 : alu_Y2;
+    wire [31:0] ex1_Y = alu_Y1; // Assign directly if no MAC
+    wire [31:0] ex2_Y = alu_Y2; // Assign directly if no MAC
     
     // JAL/JALR
     wire is_jal1 = (opcode1 == `OP_JAL);
@@ -219,10 +1509,11 @@ module cpu(
     // Memory Stage
     // =========================================================================
     wire [31:0] mem_rdata;
-    wire [31:0] mem_addr = ex1_Y;
-    wire [31:0] mem_wdata = rs2_data1;
-    wire mem_we = MemWrite1 && is_mem1;
+    wire [31:0] mem_addr = ex1_Y; // Address comes from ALU result (for LW/SW)
+    wire [31:0] mem_wdata = rs2_data1; // Data to write comes from rs2
+    wire mem_we = MemWrite1 && is_mem1; // Write enable only for STORE type
     
+    // <<< RE-INSERTED DATA MEMORY INSTANCE >>>
     Data_MEM u_dmem (
         .clk(clk),
         .reset(reset),
@@ -231,6 +1522,7 @@ module cpu(
         .write_DAT(mem_wdata),
         .read_DAT(mem_rdata)
     );
+    // <<< END RE-INSERTED BLOCK >>>
 
     // =========================================================================
     // Writeback Stage
@@ -239,8 +1531,13 @@ module cpu(
     reg [4:0] wb_rd1, wb_rd2;
     reg [31:0] wb_wdata1, wb_wdata2;
     
+    // Determine the result to write back for inst1
+    // If JAL/JALR, write link address. If LOAD, write memory data. Otherwise, write ALU result.
     wire [31:0] result1 = (is_jal1 || is_jalr1) ? link_addr1 : (MemToReg1 ? mem_rdata : ex1_Y);
-    wire [31:0] result2 = (is_jal2 || is_jalr2) ? link_addr2 : ex2_Y;
+    
+    // Determine the result to write back for inst2
+    // JAL2/JALR2 are blocked, LOAD2/STORE2 are blocked. Only ALU/MAC result needed.
+    wire [31:0] result2 = ex2_Y; // Since MEM/JAL/JALR for inst2 are blocked by 'blocks_superscalar'
     
     always @(posedge clk) begin
         if (reset) begin
@@ -304,7 +1601,7 @@ module cpu(
     always @(posedge clk) begin
         if (reset) begin
             pc_reg <= 32'd0;
-            fd_pc <= 32'd0; // <-- ADD THIS
+            fd_pc <= 32'd0; // Reset pipelined PC
             fd_inst1 <= 32'd0;
             fd_inst2 <= 32'd0;
             fd_valid <= 1'b0;
@@ -314,35 +1611,27 @@ module cpu(
             
             if (!fd_valid) begin
                 // Initial fetch
-                fd_pc <= pc; // <-- ADD THIS: PC for inst1
+                fd_pc <= pc; // Latch PC for inst1
                 fd_inst1 <= inst1_f;
                 fd_inst2 <= inst2_f;
                 fd_valid <= 1'b1;
-            // =================================================================
-            // === THIS IS THE FIX ===
-            // If a control flow instruction was taken, we must flush the
-            // instructions that are currently in the FD register.
-            // We replace them with NOPs, which creates a 1-cycle bubble.
-            // The 'inst1_f' and 'inst2_f' we read in the 'else' block
-            // next cycle will be from the *new* 'pc_reg' value.
-            // =================================================================
             end else if (control_flow_taken) begin
                 // Pipeline flush: insert NOPs after control flow change
-                fd_pc <= pc_next; // <-- ADD THIS: The NOPs are at the new PC
+                fd_pc <= pc_next; // NOPs are at the new target PC
                 fd_inst1 <= 32'h00000013;  // NOP (addi x0, x0, 0)
                 fd_inst2 <= 32'h00000013;  // NOP
                 fd_valid <= 1'b1; // Keep pipeline valid, but with NOPs
             end else if (fetch_stall) begin
                 // Stall: slide inst2 to inst1
                 // inst2_f is fetched from pc + 4 (which is pc_next)
-                fd_pc <= fd_pc + 32'd4; // <-- ADD THIS: The new fd_inst1 was at fd_pc+4
+                fd_pc <= pc_inst2; // The new fd_inst1 was at fd_pc+4 (pc_inst2)
                 fd_inst1 <= fd_inst2;
-                fd_inst2 <= inst2_f;
+                fd_inst2 <= inst2_f; // Fetch new inst2 from pc_next
                 fd_valid <= 1'b1;
             end else begin
                 // Normal fetch (issue_inst2 was true)
-                // inst1_f/inst2_f are fetched from pc and pc+4 (which are pc_next-8 and pc_next-4)
-                fd_pc <= pc; // <-- ADD THIS: The new fd_inst1 is at pc
+                // inst1_f/inst2_f are fetched from pc and pc+4 (pc_next-8 and pc_next-4)
+                fd_pc <= pc; // The new fd_inst1 is at current pc
                 fd_inst1 <= inst1_f;
                 fd_inst2 <= inst2_f;
                 fd_valid <= 1'b1;
@@ -353,1746 +1642,26 @@ module cpu(
     // =========================================================================
     // Debug Output
     // =========================================================================
-    // (Debug output unchanged)
-    wire [31:0] fd_inst1_rev = {fd_inst1[7:0], fd_inst1[15:8], fd_inst1[23:16], fd_inst1[31:24]};
-    wire [31:0] imm_j1_rev = {{11{fd_inst1_rev[31]}}, fd_inst1_rev[31], fd_inst1_rev[19:12], fd_inst1_rev[20], fd_inst1_rev[30:21], 1'b0};
-    wire [31:0] jal_target1_rev = pc + imm_j1_rev;
-    always @(posedge clk) begin
-            //if (!reset && fd_valid) begin
-            //    $display("t=%0t PC=%0d op1=%b op2=%b issue2=%b", 
-            //            $time, pc, opcode1, opcode2, issue_inst2);
-            //    $display("  fd_inst1=%h fd_inst2=%h", fd_inst1, fd_inst2);
-            //    $display("  imm_b1=%0d imm_j1=%0d", $signed(imm_b1), $signed(imm_j1));
-            //
-            //if (is_jal1) $display("  JAL1: target=%0d rd=%0d", jal_target1, rd1);
-            //if (is_jalr1) $display("  JALR1: target=%0d rd=%0d", jal_r_target1, rd1);
-            //if (opcode1 == `OP_BRANCH) $display("  BRANCH1: taken=%b target=%0d", branch_taken1, branch_target1);
-            //if (wb_we1) $display("  WB1: rd=%0d data=%h", wb_rd1, wb_wdata1);
-            //if (wb_we2) $display("  WB2: rd=%0d data=%h", wb_rd2, wb_wdata2);
-            $display("");
-            $display("DBG_FETCH t=%0t PC=%0d fd_inst1=%h", $time, pc, fd_inst1);
-            $display("DBG_BITS curr: inst[31]=%b inst[30:21]=%b inst[20]=%b inst[19:12]=%b", 
-                    fd_inst1[31], fd_inst1[30:21], fd_inst1[20], fd_inst1[19:12]);
-            $display("DBG_IMM curr: imm_j1=0x%h (%0d) jal_target1=0x%h (%0d)", imm_j1, $signed(imm_j1), jal_target1, $signed(jal_target1));
-
-
-
-            $display("DBG_REV  inst_rev=%h bits_rev: inst[31]=%b inst[30:21]=%b inst[20]=%b inst[19:12]=%b",
-                    fd_inst1_rev, fd_inst1_rev[31], fd_inst1_rev[30:21], fd_inst1_rev[20], fd_inst1_rev[19:12]);
-            $display("DBG_IMM rev: imm_j1_rev=0x%h (%0d) jal_target1_rev=0x%h (%0d)",
-                    imm_j1_rev, $signed(imm_j1_rev), jal_target1_rev, $signed(jal_target1_rev));
-            //end
-    end
-
-endmodule
-
-
-
-
-/*
-//before gemini prompts
-`timescale 1ns / 1ps
-`include "opcodes.vh"
-
-module cpu(
-    input clk,
-    input reset
-);
-
-    // =========================================================================
-    // PC Stage
-    // =========================================================================
-    reg [31:0] pc_reg;
-    wire [31:0] pc = pc_reg;
+    // ... other debug signals ...
     
-    // =========================================================================
-    // Fetch Stage  
-    // =========================================================================
-    wire [31:0] inst1_f, inst2_f;
-    wire [31:0] pc_plus_4 = pc + 32'd4;
-    Inst_MEM u_Inst_MEM1(.address(pc), .inst(inst1_f));
-    Inst_MEM u_Inst_MEM2(.address(pc_plus_4), .inst(inst2_f));
-    
-    // Fetch/Decode pipeline registers
-    reg [31:0] fd_inst1, fd_inst2;
-    reg fd_valid;
-    
-    // =========================================================================
-    // Decode Stage (uses fd_inst1, fd_inst2)
-    // =========================================================================
-    wire [6:0] opcode1 = fd_inst1[6:0];
-    wire [4:0] rd1 = fd_inst1[11:7];
-    wire [2:0] funct3_1 = fd_inst1[14:12];
-    wire [4:0] rs1_1 = fd_inst1[19:15];
-    wire [4:0] rs2_1 = fd_inst1[24:20];
-    wire [6:0] funct7_1 = fd_inst1[31:25];
-
-    wire [6:0] opcode2 = fd_inst2[6:0];
-    wire [4:0] rd2 = fd_inst2[11:7];
-    wire [2:0] funct3_2 = fd_inst2[14:12];
-    wire [4:0] rs1_2 = fd_inst2[19:15];
-    wire [4:0] rs2_2 = fd_inst2[24:20];
-    wire [6:0] funct7_2 = fd_inst2[31:25];
-
-    // Immediate generation (RISC-V correct encoding)
-    //wire [31:0] imm_i1 = {{20{fd_inst1[31]}}, fd_inst1[31:20]};
-    //wire [31:0] imm_s1 = {{20{fd_inst1[31]}}, fd_inst1[31:25], fd_inst1[11:7]};
-    //wire [31:0] imm_b1 = {{19{fd_inst1[31]}}, fd_inst1[31], fd_inst1[7], fd_inst1[30:25], fd_inst1[11:8], 1'b0};
-    //wire [31:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[19:12], fd_inst1[20], fd_inst1[30:21], fd_inst1[31], 1'b0};
-
-    //wire [31:0] imm_i2 = {{20{fd_inst2[31]}}, fd_inst2[31:20]};
-    //wire [31:0] imm_s2 = {{20{fd_inst2[31]}}, fd_inst2[31:25], fd_inst2[11:7]};
-    //wire [31:0] imm_b2 = {{19{fd_inst2[31]}}, fd_inst2[31], fd_inst2[7], fd_inst2[30:25], fd_inst2[11:8], 1'b0};
-    //wire [31:0] imm_j2 = {{11{fd_inst2[31]}}, fd_inst2[19:12], fd_inst2[20], fd_inst2[30:21], fd_inst2[31], 1'b0};
-
-    // I-type: [31:20]
-    wire [31:0] imm_i1 = {{20{fd_inst1[31]}}, fd_inst1[31:20]};
-    wire [31:0] imm_i2 = {{20{fd_inst2[31]}}, fd_inst2[31:20]};
-
-    // S-type: [31:25 | 11:7]
-    wire [31:0] imm_s1 = {{20{fd_inst1[31]}}, fd_inst1[31:25], fd_inst1[11:7]};
-    wire [31:0] imm_s2 = {{20{fd_inst2[31]}}, fd_inst2[31:25], fd_inst2[11:7]};
-
-    // B-type: [31 | 7 | 30:25 | 11:8 | 0]
-    wire [31:0] imm_b1 = {{19{fd_inst1[31]}}, fd_inst1[31], fd_inst1[7],
-                        fd_inst1[30:25], fd_inst1[11:8], 1'b0};
-    wire [31:0] imm_b2 = {{19{fd_inst2[31]}}, fd_inst2[31], fd_inst2[7],
-                        fd_inst2[30:25], fd_inst2[11:8], 1'b0};
-
-    // J-type: [31 | 19:12 | 20 | 30:21 | 0]
-    wire [31:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[31],
-                        fd_inst1[19:12], fd_inst1[20],
-                        fd_inst1[30:21], 1'b0};
-    wire [31:0] imm_j2 = {{11{fd_inst2[31]}}, fd_inst2[31],
-                        fd_inst2[19:12], fd_inst2[20],
-                        fd_inst2[30:21], 1'b0};
-
-    // Branch/Jump targets
-    wire [31:0] jal_target1 = pc + imm_j1;
-    wire [31:0] jal_target2 = pc + imm_j2;
-    wire [31:0] branch_target1 = pc + imm_b1;
-    
-    // =========================================================================
-    // Control Signals
-    // =========================================================================
-    wire RegWrite1, MemRead1, MemWrite1, MemToReg1, ALUSrc1, Branch1;
-    wire RegWrite2, MemRead2, MemWrite2, MemToReg2, ALUSrc2, Branch2;
-
-    control_unit u_ctrl1 (
-        .opcode(opcode1),
-        .RegWrite(RegWrite1),
-        .MemRead(MemRead1),
-        .MemWrite(MemWrite1),
-        .MemToReg(MemToReg1),
-        .ALUSrc(ALUSrc1),
-        .Branch(Branch1)
-    );
-
-    control_unit u_ctrl2 (
-        .opcode(opcode2),
-        .RegWrite(RegWrite2),
-        .MemRead(MemRead2),
-        .MemWrite(MemWrite2),
-        .MemToReg(MemToReg2),
-        .ALUSrc(ALUSrc2),
-        .Branch(Branch2)
-    );
-
-    wire [4:0] alu_ctrl1, alu_ctrl2;
-    alu_control u_alu_ctrl1 (
-        .opcode(opcode1),
-        .funct3(funct3_1),
-        .funct7(funct7_1),
-        .ctrl(alu_ctrl1)
-    );
-
-    alu_control u_alu_ctrl2 (
-        .opcode(opcode2),
-        .funct3(funct3_2),
-        .funct7(funct7_2),
-        .ctrl(alu_ctrl2)
-    );
-
-    // =========================================================================
-    // Register File
-    // =========================================================================
-    wire [31:0] rs1_data1, rs2_data1, rs1_data2, rs2_data2;
-    
-    register_file_dual u_regfile (
-        .clk(clk),
-        .reset(reset),
-        .we1(wb_we1),
-        .we2(wb_we2),
-        .rs1_1(rs1_1),
-        .rs2_1(rs2_1),
-        .rs1_2(rs1_2),
-        .rs2_2(rs2_2),
-        .rd1(wb_rd1),
-        .rd2(wb_rd2),
-        .wdata1(wb_wdata1),
-        .wdata2(wb_wdata2),
-        .rdata1_1(rs1_data1),
-        .rdata2_1(rs2_data1),
-        .rdata1_2(rs1_data2),
-        .rdata2_2(rs2_data2)
-    );
-
-    // =========================================================================
-    // Hazard Detection
-    // =========================================================================
-    wire is_mem1 = (opcode1 == `OP_LOAD) || (opcode1 == `OP_STORE);
-    wire is_mem2 = (opcode2 == `OP_LOAD) || (opcode2 == `OP_STORE);
-    
-    // Control flow instructions block superscalar execution
-    wire is_control_flow1 = (opcode1 == `OP_BRANCH) || (opcode1 == `OP_JAL) || (opcode1 == `OP_JALR);
-    wire is_control_flow2 = (opcode2 == `OP_BRANCH) || (opcode2 == `OP_JAL) || (opcode2 == `OP_JALR);
-    
-    // RAW hazard: inst2 reads a register that inst1 writes
-    wire raw_rs1 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs1_2);
-    wire raw_rs2 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs2_2);
-    wire raw_hazard = raw_rs1 || raw_rs2;
-    
-    // Load-use hazard
-    wire load_use_hazard = (opcode1 == `OP_LOAD) && raw_hazard;
-    
-    // WAW hazard
-    wire waw_hazard = (rd1 != 5'd0) && (rd1 == rd2) && RegWrite1 && RegWrite2;
-    
-    // Blocking conditions
-    wire blocks_superscalar = is_mem1 || is_mem2 || is_control_flow1 || is_control_flow2;
-    
-    // Issue logic
-    wire issue_inst2 = ~load_use_hazard && ~waw_hazard && ~blocks_superscalar && fd_valid;
-
-    // =========================================================================
-    // Execute Stage
-    // =========================================================================
-    // EX-EX forwarding
-    wire forward_rs1_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs1_2) && !MemToReg1;
-    wire forward_rs2_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_2) && !MemToReg1;
-    
-    wire [31:0] rs1_data2_fwd = forward_rs1_2 ? ex1_Y : rs1_data2;
-    wire [31:0] rs2_data2_fwd = forward_rs2_2 ? ex1_Y : rs2_data2;
-    
-    wire [31:0] alu_B1 = ALUSrc1 ? ((opcode1 == `OP_STORE) ? imm_s1 : imm_i1) : rs2_data1;
-    wire [31:0] alu_B2 = ALUSrc2 ? ((opcode2 == `OP_STORE) ? imm_s2 : imm_i2) : rs2_data2_fwd;
-    
-    wire [31:0] alu_Y1, alu_Y2, mac_Y1, mac_Y2;
-    
-    ALU u_alu1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(alu_Y1));
-    MAC u_mac1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(mac_Y1));
-    
-    ALU u_alu2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(alu_Y2));
-    MAC u_mac2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(mac_Y2));
-    
-    wire uses_mac1 = (alu_ctrl1 >= 5'd10 && alu_ctrl1 <= 5'd13);
-    wire uses_mac2 = (alu_ctrl2 >= 5'd10 && alu_ctrl2 <= 5'd13);
-    
-    wire [31:0] ex1_Y = uses_mac1 ? mac_Y1 : alu_Y1;
-    wire [31:0] ex2_Y = uses_mac2 ? mac_Y2 : alu_Y2;
-    
-    // JAL/JALR
-    wire is_jal1 = (opcode1 == `OP_JAL);
-    wire is_jalr1 = (opcode1 == `OP_JALR);
-    wire is_jal2 = (opcode2 == `OP_JAL);
-    wire is_jalr2 = (opcode2 == `OP_JALR);
-    
-    wire [31:0] link_addr1 = pc + 32'd4;
-    wire [31:0] link_addr2 = pc + 32'd4;
-    
-    // JALR target
-    wire [31:0] jalr_target1 = (rs1_data1 + imm_i1) & ~32'd1;
-
-    // =========================================================================
-    // Branch Logic
-    // =========================================================================
-    wire branch_taken1 = (opcode1 == `OP_BRANCH) && (
-        (funct3_1 == 3'b000 && rs1_data1 == rs2_data1) ||  // BEQ
-        (funct3_1 == 3'b001 && rs1_data1 != rs2_data1)     // BNE
-    );
-
-    // =========================================================================
-    // Memory Stage
-    // =========================================================================
-    wire [31:0] mem_rdata;
-    wire [31:0] mem_addr = ex1_Y;
-    wire [31:0] mem_wdata = rs2_data1;
-    wire mem_we = MemWrite1 && is_mem1;
-    
-    Data_MEM u_dmem (
-        .clk(clk),
-        .reset(reset),
-        .write_en(mem_we),
-        .address(mem_addr),
-        .write_DAT(mem_wdata),
-        .read_DAT(mem_rdata)
-    );
-
-    // =========================================================================
-    // Writeback Stage
-    // =========================================================================
-    reg wb_we1, wb_we2;
-    reg [4:0] wb_rd1, wb_rd2;
-    reg [31:0] wb_wdata1, wb_wdata2;
-    
-    wire [31:0] result1 = (is_jal1 || is_jalr1) ? link_addr1 : (MemToReg1 ? mem_rdata : ex1_Y);
-    wire [31:0] result2 = (is_jal2 || is_jalr2) ? link_addr2 : ex2_Y;
-    
-    always @(posedge clk) begin
-        if (reset) begin
-            wb_we1 <= 1'b0;
-            wb_we2 <= 1'b0;
-            wb_rd1 <= 5'd0;
-            wb_rd2 <= 5'd0;
-            wb_wdata1 <= 32'd0;
-            wb_wdata2 <= 32'd0;
-        end else begin
-            wb_we1 <= RegWrite1 && (rd1 != 5'd0) && fd_valid;
-            wb_rd1 <= rd1;
-            wb_wdata1 <= result1;
-            
-            wb_we2 <= issue_inst2 && RegWrite2 && (rd2 != 5'd0);
-            wb_rd2 <= rd2;
-            wb_wdata2 <= result2;
-        end
-    end
-
-    // =========================================================================
-    // PC Update and Fetch Control
-    // =========================================================================
-    reg [31:0] pc_next;
-    reg fetch_stall;
-    
-    always @(*) begin
-        fetch_stall = 1'b0;
-        
-        if (reset) begin
-            pc_next = 32'd0;
-        end else if (!fd_valid) begin
-            // Initial state: hold PC while fetching
-            pc_next = pc;
-        end else if (opcode1 == `OP_JAL) begin
-            pc_next = jal_target1;
-        end else if (opcode1 == `OP_JALR) begin
-            pc_next = jalr_target1;
-        end else if (branch_taken1) begin
-            pc_next = branch_target1;
-        end else begin
-            if (issue_inst2) begin
-                pc_next = pc + 8;
-            end else begin
-                pc_next = pc + 4;
-                fetch_stall = 1'b1;
-            end
-        end
-    end
-    
-    // Detect control flow changes that require pipeline flush
-    wire control_flow_taken = (opcode1 == `OP_JAL) || (opcode1 == `OP_JALR) || branch_taken1;
-    
-    always @(posedge clk) begin
-        if (reset) begin
-            pc_reg <= 32'd0;
-            fd_inst1 <= 32'd0;
-            fd_inst2 <= 32'd0;
-            fd_valid <= 1'b0;
-        end else begin
-            pc_reg <= pc_next;
-            
-            if (!fd_valid) begin
-                // Initial fetch
-                fd_inst1 <= inst1_f;
-                fd_inst2 <= inst2_f;
-                fd_valid <= 1'b1;
-            //end else if (control_flow_taken) begin
-            //    // Pipeline flush: insert NOPs after control flow change
-            //    fd_inst1 <= 32'h00000013;  // NOP (addi x0, x0, 0)
-            //    fd_inst2 <= 32'h00000013;  // NOP
-            //    fd_valid <= 1'b1;
-            end else if (fetch_stall) begin
-                // Stall: slide inst2 to inst1
-                fd_inst1 <= fd_inst2;
-                fd_inst2 <= inst2_f;
-            end else begin
-                // Normal fetch
-                fd_inst1 <= inst1_f;
-                fd_inst2 <= inst2_f;
-            end
-        end
-    end
-
-    // =========================================================================
-    // Debug Output
-    // =========================================================================
-    // Byte-reversed view (common Inst_MEM endianness problem)
-    wire [31:0] fd_inst1_rev = {fd_inst1[7:0], fd_inst1[15:8], fd_inst1[23:16], fd_inst1[31:24]};
-    wire [31:0] imm_j1_rev = {{11{fd_inst1_rev[31]}}, fd_inst1_rev[31], fd_inst1_rev[19:12], fd_inst1_rev[20], fd_inst1_rev[30:21], 1'b0};
-    wire [31:0] jal_target1_rev = pc + imm_j1_rev;
-    always @(posedge clk) begin
-            //if (!reset && fd_valid) begin
-            //    $display("t=%0t PC=%0d op1=%b op2=%b issue2=%b", 
-            //            $time, pc, opcode1, opcode2, issue_inst2);
-            //    $display("  fd_inst1=%h fd_inst2=%h", fd_inst1, fd_inst2);
-            //    $display("  imm_b1=%0d imm_j1=%0d", $signed(imm_b1), $signed(imm_j1));
-            //
-            //if (is_jal1) $display("  JAL1: target=%0d rd=%0d", jal_target1, rd1);
-            //if (is_jalr1) $display("  JALR1: target=%0d rd=%0d", jalr_target1, rd1);
-            //if (opcode1 == `OP_BRANCH) $display("  BRANCH1: taken=%b target=%0d", branch_taken1, branch_target1);
-            //if (wb_we1) $display("  WB1: rd=%0d data=%h", wb_rd1, wb_wdata1);
-            //if (wb_we2) $display("  WB2: rd=%0d data=%h", wb_rd2, wb_wdata2);
-            $display("");
-            $display("DBG_FETCH t=%0t PC=%0d fd_inst1=%h", $time, pc, fd_inst1);
-            $display("DBG_BITS curr: inst[31]=%b inst[30:21]=%b inst[20]=%b inst[19:12]=%b", 
-                    fd_inst1[31], fd_inst1[30:21], fd_inst1[20], fd_inst1[19:12]);
-            $display("DBG_IMM curr: imm_j1=0x%h (%0d) jal_target1=0x%h (%0d)", imm_j1, $signed(imm_j1), jal_target1, $signed(jal_target1));
-
-
-
-            $display("DBG_REV  inst_rev=%h bits_rev: inst[31]=%b inst[30:21]=%b inst[20]=%b inst[19:12]=%b",
-                    fd_inst1_rev, fd_inst1_rev[31], fd_inst1_rev[30:21], fd_inst1_rev[20], fd_inst1_rev[19:12]);
-            $display("DBG_IMM rev: imm_j1_rev=0x%h (%0d) jal_target1_rev=0x%h (%0d)",
-                    imm_j1_rev, $signed(imm_j1_rev), jal_target1_rev, $signed(jal_target1_rev));
-            //end
-    end
-
-endmodule
-
-*/
-/*
-`timescale 1ns / 1ps
-`include "opcodes.vh"
-
-module cpu(
-    input clk,
-    input reset
-);
-
-    // =========================================================================
-    // PC Stage
-    // =========================================================================
-    reg [31:0] pc_reg;
-    wire [31:0] pc = pc_reg;
-    
-    // =========================================================================
-    // Fetch Stage  
-    // =========================================================================
-    wire [31:0] inst1_f, inst2_f;
-    wire [31:0] pc_plus_4 = pc + 32'd4;
-    Inst_MEM u_Inst_MEM1(.address(pc), .inst(inst1_f));
-    Inst_MEM u_Inst_MEM2(.address(pc_plus_4), .inst(inst2_f));
-    
-    // Fetch/Decode pipeline registers
-    reg [31:0] fd_inst1, fd_inst2;
-    reg fd_valid;
-    
-    // =========================================================================
-    // Decode Stage (uses fd_inst1, fd_inst2)
-    // =========================================================================
-    wire [6:0] opcode1 = fd_inst1[6:0];
-    wire [4:0] rd1 = fd_inst1[11:7];
-    wire [2:0] funct3_1 = fd_inst1[14:12];
-    wire [4:0] rs1_1 = fd_inst1[19:15];
-    wire [4:0] rs2_1 = fd_inst1[24:20];
-    wire [6:0] funct7_1 = fd_inst1[31:25];
-
-    wire [6:0] opcode2 = fd_inst2[6:0];
-    wire [4:0] rd2 = fd_inst2[11:7];
-    wire [2:0] funct3_2 = fd_inst2[14:12];
-    wire [4:0] rs1_2 = fd_inst2[19:15];
-    wire [4:0] rs2_2 = fd_inst2[24:20];
-    wire [6:0] funct7_2 = fd_inst2[31:25];
-
-    // Immediate generation
-    wire [31:0] imm_i1 = {{20{fd_inst1[31]}}, fd_inst1[31:20]};
-    wire [31:0] imm_s1 = {{20{fd_inst1[31]}}, fd_inst1[31:25], fd_inst1[11:7]};
-    wire [31:0] imm_b1 = {{19{fd_inst1[31]}}, fd_inst1[31], fd_inst1[7], fd_inst1[30:25], fd_inst1[11:8], 1'b0};
-    wire [31:0] imm_j1 = {{11{fd_inst1[31]}}, fd_inst1[31], fd_inst1[19:12], fd_inst1[20], fd_inst1[30:21], 1'b0};
-    
-    wire [31:0] imm_i2 = {{20{fd_inst2[31]}}, fd_inst2[31:20]};
-    wire [31:0] imm_s2 = {{20{fd_inst2[31]}}, fd_inst2[31:25], fd_inst2[11:7]};
-    wire [31:0] imm_b2 = {{19{fd_inst2[31]}}, fd_inst2[31], fd_inst2[7], fd_inst2[30:25], fd_inst2[11:8], 1'b0};
-    wire [31:0] imm_j2 = {{11{fd_inst2[31]}}, fd_inst2[31], fd_inst2[19:12], fd_inst2[20], fd_inst2[30:21], 1'b0};
-
-    // Branch/Jump targets
-    wire [31:0] jal_target1 = pc + imm_j1;
-    wire [31:0] jal_target2 = pc + imm_j2;
-    wire [31:0] branch_target1 = pc + imm_b1;
-    
-    // =========================================================================
-    // Control Signals
-    // =========================================================================
-    wire RegWrite1, MemRead1, MemWrite1, MemToReg1, ALUSrc1, Branch1;
-    wire RegWrite2, MemRead2, MemWrite2, MemToReg2, ALUSrc2, Branch2;
-
-    control_unit u_ctrl1 (
-        .opcode(opcode1),
-        .RegWrite(RegWrite1),
-        .MemRead(MemRead1),
-        .MemWrite(MemWrite1),
-        .MemToReg(MemToReg1),
-        .ALUSrc(ALUSrc1),
-        .Branch(Branch1)
-    );
-
-    control_unit u_ctrl2 (
-        .opcode(opcode2),
-        .RegWrite(RegWrite2),
-        .MemRead(MemRead2),
-        .MemWrite(MemWrite2),
-        .MemToReg(MemToReg2),
-        .ALUSrc(ALUSrc2),
-        .Branch(Branch2)
-    );
-
-    wire [4:0] alu_ctrl1, alu_ctrl2;
-    alu_control u_alu_ctrl1 (
-        .opcode(opcode1),
-        .funct3(funct3_1),
-        .funct7(funct7_1),
-        .ctrl(alu_ctrl1)
-    );
-
-    alu_control u_alu_ctrl2 (
-        .opcode(opcode2),
-        .funct3(funct3_2),
-        .funct7(funct7_2),
-        .ctrl(alu_ctrl2)
-    );
-
-    // =========================================================================
-    // Register File
-    // =========================================================================
-    wire [31:0] rs1_data1, rs2_data1, rs1_data2, rs2_data2;
-    
-    register_file_dual u_regfile (
-        .clk(clk),
-        .reset(reset),
-        .we1(wb_we1),
-        .we2(wb_we2),
-        .rs1_1(rs1_1),
-        .rs2_1(rs2_1),
-        .rs1_2(rs1_2),
-        .rs2_2(rs2_2),
-        .rd1(wb_rd1),
-        .rd2(wb_rd2),
-        .wdata1(wb_wdata1),
-        .wdata2(wb_wdata2),
-        .rdata1_1(rs1_data1),
-        .rdata2_1(rs2_data1),
-        .rdata1_2(rs1_data2),
-        .rdata2_2(rs2_data2)
-    );
-
-    // =========================================================================
-    // Hazard Detection
-    // =========================================================================
-    wire is_mem1 = (opcode1 == `OP_LOAD) || (opcode1 == `OP_STORE);
-    wire is_mem2 = (opcode2 == `OP_LOAD) || (opcode2 == `OP_STORE);
-    
-    // Control flow instructions block superscalar execution
-    wire is_control_flow1 = (opcode1 == `OP_BRANCH) || (opcode1 == `OP_JAL) || (opcode1 == `OP_JALR);
-    wire is_control_flow2 = (opcode2 == `OP_BRANCH) || (opcode2 == `OP_JAL) || (opcode2 == `OP_JALR);
-    
-    // RAW hazard: inst2 reads a register that inst1 writes
-    wire raw_rs1 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs1_2);
-    wire raw_rs2 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs2_2);
-    wire raw_hazard = raw_rs1 || raw_rs2;
-    
-    // Load-use hazard
-    wire load_use_hazard = (opcode1 == `OP_LOAD) && raw_hazard;
-    
-    // WAW hazard
-    wire waw_hazard = (rd1 != 5'd0) && (rd1 == rd2) && RegWrite1 && RegWrite2;
-    
-    // Blocking conditions
-    wire blocks_superscalar = is_mem1 || is_mem2 || is_control_flow1 || is_control_flow2;
-    
-    // Issue logic
-    wire issue_inst2 = ~load_use_hazard && ~waw_hazard && ~blocks_superscalar && fd_valid;
-
-    // =========================================================================
-    // Execute Stage
-    // =========================================================================
-    // EX-EX forwarding
-    wire forward_rs1_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs1_2) && !MemToReg1;
-    wire forward_rs2_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_2) && !MemToReg1;
-    
-    wire [31:0] rs1_data2_fwd = forward_rs1_2 ? ex1_Y : rs1_data2;
-    wire [31:0] rs2_data2_fwd = forward_rs2_2 ? ex1_Y : rs2_data2;
-    
-    wire [31:0] alu_B1 = ALUSrc1 ? ((opcode1 == `OP_STORE) ? imm_s1 : imm_i1) : rs2_data1;
-    wire [31:0] alu_B2 = ALUSrc2 ? ((opcode2 == `OP_STORE) ? imm_s2 : imm_i2) : rs2_data2_fwd;
-    
-    wire [31:0] alu_Y1, alu_Y2, mac_Y1, mac_Y2;
-    
-    ALU u_alu1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(alu_Y1));
-    MAC u_mac1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(mac_Y1));
-    
-    ALU u_alu2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(alu_Y2));
-    MAC u_mac2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(mac_Y2));
-    
-    wire uses_mac1 = (alu_ctrl1 >= 5'd10 && alu_ctrl1 <= 5'd13);
-    wire uses_mac2 = (alu_ctrl2 >= 5'd10 && alu_ctrl2 <= 5'd13);
-    
-    wire [31:0] ex1_Y = uses_mac1 ? mac_Y1 : alu_Y1;
-    wire [31:0] ex2_Y = uses_mac2 ? mac_Y2 : alu_Y2;
-    
-    // JAL/JALR
-    wire is_jal1 = (opcode1 == `OP_JAL);
-    wire is_jalr1 = (opcode1 == `OP_JALR);
-    wire is_jal2 = (opcode2 == `OP_JAL);
-    wire is_jalr2 = (opcode2 == `OP_JALR);
-    
-    wire [31:0] link_addr1 = pc + 32'd4;
-    wire [31:0] link_addr2 = pc + 32'd4;
-    
-    // JALR target
-    wire [31:0] jalr_target1 = (rs1_data1 + imm_i1) & ~32'd1;
-
-    // =========================================================================
-    // Branch Logic
-    // =========================================================================
-    wire branch_taken1 = (opcode1 == `OP_BRANCH) && (
-        (funct3_1 == 3'b000 && rs1_data1 == rs2_data1) ||  // BEQ
-        (funct3_1 == 3'b001 && rs1_data1 != rs2_data1)     // BNE
-    );
-
-    // =========================================================================
-    // Memory Stage
-    // =========================================================================
-    wire [31:0] mem_rdata;
-    wire [31:0] mem_addr = ex1_Y;
-    wire [31:0] mem_wdata = rs2_data1;
-    wire mem_we = MemWrite1 && is_mem1;
-    
-    Data_MEM u_dmem (
-        .clk(clk),
-        .reset(reset),
-        .write_en(mem_we),
-        .address(mem_addr),
-        .write_DAT(mem_wdata),
-        .read_DAT(mem_rdata)
-    );
-
-    // =========================================================================
-    // Writeback Stage
-    // =========================================================================
-    reg wb_we1, wb_we2;
-    reg [4:0] wb_rd1, wb_rd2;
-    reg [31:0] wb_wdata1, wb_wdata2;
-    
-    wire [31:0] result1 = (is_jal1 || is_jalr1) ? link_addr1 : (MemToReg1 ? mem_rdata : ex1_Y);
-    wire [31:0] result2 = (is_jal2 || is_jalr2) ? link_addr2 : ex2_Y;
-    
-    always @(posedge clk) begin
-        if (reset) begin
-            wb_we1 <= 1'b0;
-            wb_we2 <= 1'b0;
-            wb_rd1 <= 5'd0;
-            wb_rd2 <= 5'd0;
-            wb_wdata1 <= 32'd0;
-            wb_wdata2 <= 32'd0;
-        end else begin
-            wb_we1 <= RegWrite1 && (rd1 != 5'd0) && fd_valid;
-            wb_rd1 <= rd1;
-            wb_wdata1 <= result1;
-            
-            wb_we2 <= issue_inst2 && RegWrite2 && (rd2 != 5'd0);
-            wb_rd2 <= rd2;
-            wb_wdata2 <= result2;
-        end
-    end
-
-    // =========================================================================
-    // PC Update and Fetch Control
-    // =========================================================================
-    reg [31:0] pc_next;
-    reg fetch_stall;
-    
-    always @(*) begin
-        fetch_stall = 1'b0;
-        
-        if (reset) begin
-            pc_next = 32'd0;
-        end else if (!fd_valid) begin
-            // Initial state: hold PC while fetching
-            pc_next = pc;
-        end else if (opcode1 == `OP_JAL) begin
-            pc_next = jal_target1;
-        end else if (opcode1 == `OP_JALR) begin
-            pc_next = jalr_target1;
-        end else if (branch_taken1) begin
-            pc_next = branch_target1;
-        end else begin
-            if (issue_inst2) begin
-                pc_next = pc + 8;
-            end else begin
-                pc_next = pc + 4;
-                fetch_stall = 1'b1;
-            end
-        end
-    end
-    
-    always @(posedge clk) begin
-        if (reset) begin
-            pc_reg <= 32'd0;
-            fd_inst1 <= 32'd0;
-            fd_inst2 <= 32'd0;
-            fd_valid <= 1'b0;
-        end else begin
-            pc_reg <= pc_next;
-            
-            if (!fd_valid) begin
-                // Initial fetch
-                fd_inst1 <= inst1_f;
-                fd_inst2 <= inst2_f;
-                fd_valid <= 1'b1;
-            end else if (fetch_stall) begin
-                // Stall: slide inst2 to inst1
-                fd_inst1 <= fd_inst2;
-                fd_inst2 <= inst2_f;
-            end else begin
-                // Normal fetch
-                fd_inst1 <= inst1_f;
-                fd_inst2 <= inst2_f;
-            end
-        end
-    end
-
-    // =========================================================================
-    // Debug Output
-    // =========================================================================
     always @(posedge clk) begin
         if (!reset && fd_valid) begin
-            $display("PC=%0d fd_inst1=%h opcode=%b", pc, fd_inst1, opcode1);
-            $display("  Branch: taken=%b target=%0d (imm_b1=%0d)", branch_taken1, branch_target1, $signed(imm_b1));
-            $display("  pc_next=%0d", pc_next);
-            
-            if (is_jal1) $display("  JAL1: target=%0d rd=%0d", jal_target1, rd1);
-            if (is_jalr1) $display("  JALR1: target=%0d rd=%0d", jalr_target1, rd1);
-            if (opcode1 == `OP_BRANCH) $display("  BRANCH1: taken=%b target=%0d", branch_taken1, branch_target1);
-            if (wb_we1) $display("  WB1: rd=%0d data=%h", wb_rd1, wb_wdata1);
-            if (wb_we2) $display("  WB2: rd=%0d data=%h", wb_rd2, wb_wdata2);
-            $display("");
+            $display("t=%0t PC=%0d [%s|%s] issue2=%b", 
+                    $time, fd_pc, inst1_name, inst2_name, issue_inst2);
+        
+            if (load_use_hazard_detected)
+                $display("  >>> LOAD-USE STALL DETECTED <<<");
+                
+            if (control_flow_taken)
+                $display("  >>> CONTROL FLOW: target=%0d <<<", pc_next);
+                
+            if (wb_we1)
+                $display("  WB1: x%0d = 0x%h", wb_rd1, wb_wdata1);
+            if (wb_we2)
+                $display("  WB2: x%0d = 0x%h", wb_rd2, wb_wdata2);
         end
-    end
+    end // End always @(posedge clk)
 
 endmodule
-*/
-/*
-`timescale 1ns / 1ps
-`include "opcodes.vh"
-
-module cpu(
-    input clk,
-    input reset
-);
-
-    // =========================================================================
-    // PC and Fetch Stage
-    // =========================================================================
-    reg [31:0] pc_reg;
-    wire [31:0] pc = pc_reg;
-    
-    wire [31:0] inst1_f, inst2_f;
-    Inst_MEM u_Inst_MEM1(.address(pc), .inst(inst1_f));
-    Inst_MEM u_Inst_MEM2(.address((pc+4)), .inst(inst2_f));
-    
-    reg [31:0] inst1_reg, inst2_reg;
-    reg inst2_valid;  // Track if inst2_reg holds a valid stalled instruction
-    
-    // =========================================================================
-    // Decode Stage
-    // =========================================================================
-    wire [6:0] opcode1 = inst1_reg[6:0];
-    wire [4:0] rd1 = inst1_reg[11:7];
-    wire [2:0] funct3_1 = inst1_reg[14:12];
-    wire [4:0] rs1_1 = inst1_reg[19:15];
-    wire [4:0] rs2_1 = inst1_reg[24:20];
-    wire [6:0] funct7_1 = inst1_reg[31:25];
-
-    wire [6:0] opcode2 = inst2_reg[6:0];
-    wire [4:0] rd2 = inst2_reg[11:7];
-    wire [2:0] funct3_2 = inst2_reg[14:12];
-    wire [4:0] rs1_2 = inst2_reg[19:15];
-    wire [4:0] rs2_2 = inst2_reg[24:20];
-    wire [6:0] funct7_2 = inst2_reg[31:25];
-
-    // Immediate generation
-    wire [31:0] imm_i1 = {{20{inst1_reg[31]}}, inst1_reg[31:20]};
-    wire [31:0] imm_s1 = {{20{inst1_reg[31]}}, inst1_reg[31:25], inst1_reg[11:7]};
-    wire [31:0] imm_b1 = {{19{inst1_reg[31]}}, inst1_reg[31], inst1_reg[7], inst1_reg[30:25], inst1_reg[11:8], 1'b0};
-    wire [31:0] imm_j1 = {{11{inst1_reg[31]}}, inst1_reg[31], inst1_reg[19:12], inst1_reg[20], inst1_reg[30:21], 1'b0};
-    
-    wire [31:0] imm_i2 = {{20{inst2_reg[31]}}, inst2_reg[31:20]};
-    wire [31:0] imm_s2 = {{20{inst2_reg[31]}}, inst2_reg[31:25], inst2_reg[11:7]};
-    wire [31:0] imm_b2 = {{19{inst2_reg[31]}}, inst2_reg[31], inst2_reg[7], inst2_reg[30:25], inst2_reg[11:8], 1'b0};
-
-    // Branch/Jump targets
-    wire [31:0] jal_target1 = pc + imm_j1;
-    wire [31:0] branch_target1 = pc + imm_b1;
-    
-    // =========================================================================
-    // Control Signals
-    // =========================================================================
-    wire RegWrite1, MemRead1, MemWrite1, MemToReg1, ALUSrc1, Branch1;
-    wire RegWrite2, MemRead2, MemWrite2, MemToReg2, ALUSrc2, Branch2;
-
-    control_unit u_ctrl1 (
-        .opcode(opcode1),
-        .RegWrite(RegWrite1),
-        .MemRead(MemRead1),
-        .MemWrite(MemWrite1),
-        .MemToReg(MemToReg1),
-        .ALUSrc(ALUSrc1),
-        .Branch(Branch1)
-    );
-
-    control_unit u_ctrl2 (
-        .opcode(opcode2),
-        .RegWrite(RegWrite2),
-        .MemRead(MemRead2),
-        .MemWrite(MemWrite2),
-        .MemToReg(MemToReg2),
-        .ALUSrc(ALUSrc2),
-        .Branch(Branch2)
-    );
-
-    wire [4:0] alu_ctrl1, alu_ctrl2;
-    alu_control u_alu_ctrl1 (
-        .opcode(opcode1),
-        .funct3(funct3_1),
-        .funct7(funct7_1),
-        .ctrl(alu_ctrl1)
-    );
-
-    alu_control u_alu_ctrl2 (
-        .opcode(opcode2),
-        .funct3(funct3_2),
-        .funct7(funct7_2),
-        .ctrl(alu_ctrl2)
-    );
-
-    // =========================================================================
-    // Register File
-    // =========================================================================
-    wire [31:0] rs1_data1, rs2_data1, rs1_data2, rs2_data2;
-    
-    register_file_dual u_regfile (
-        .clk(clk),
-        .reset(reset),
-        .we1(wb_we1),
-        .we2(wb_we2),
-        .rs1_1(rs1_1),
-        .rs2_1(rs2_1),
-        .rs1_2(rs1_2),
-        .rs2_2(rs2_2),
-        .rd1(wb_rd1),
-        .rd2(wb_rd2),
-        .wdata1(wb_wdata1),
-        .wdata2(wb_wdata2),
-        .rdata1_1(rs1_data1),
-        .rdata2_1(rs2_data1),
-        .rdata1_2(rs1_data2),
-        .rdata2_2(rs2_data2)
-    );
-
-    // =========================================================================
-    // Hazard Detection
-    // =========================================================================
-    wire is_mem1 = (opcode1 == `OP_LOAD) || (opcode1 == `OP_STORE);
-    wire is_mem2 = (opcode2 == `OP_LOAD) || (opcode2 == `OP_STORE);
-    
-    // RAW hazard: inst2 reads a register that inst1 writes
-    wire raw_rs1 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs1_2);
-    wire raw_rs2 = (rd1 != 5'd0) && RegWrite1 && (rd1 == rs2_2);
-    wire raw_hazard = raw_rs1 || raw_rs2;
-    
-    // Load-use hazard: inst1 is a load and inst2 needs its result
-    // We can't forward load data in the same cycle, so must stall
-    wire load_use_hazard = (opcode1 == `OP_LOAD) && raw_hazard;
-    
-    // WAW hazard: both write to same destination
-    wire waw_hazard = (rd1 != 5'd0) && (rd1 == rd2) && RegWrite1 && RegWrite2;
-    
-    // CRITICAL: Memory operations execute alone (no superscalar)
-    wire mem_blocks_superscalar = is_mem1 || is_mem2;
-    
-    // Issue logic: inst2 can only issue if no hazards and no memory ops
-    // RAW hazard without load is OK (we have forwarding)
-    // But load-use hazard requires stall
-    wire issue_inst2 = ~load_use_hazard && ~waw_hazard && ~mem_blocks_superscalar;
-
-    // =========================================================================
-    // Execute Stage
-    // =========================================================================
-    // EX-EX forwarding: if inst1 writes a register that inst2 reads, forward it
-    wire forward_rs1_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs1_2) && !MemToReg1;
-    wire forward_rs2_2 = RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_2) && !MemToReg1;
-    
-    wire [31:0] rs1_data2_fwd = forward_rs1_2 ? ex1_Y : rs1_data2;
-    wire [31:0] rs2_data2_fwd = forward_rs2_2 ? ex1_Y : rs2_data2;
-    
-    wire [31:0] alu_B1 = ALUSrc1 ? ((opcode1 == `OP_STORE) ? imm_s1 : imm_i1) : rs2_data1;
-    wire [31:0] alu_B2 = ALUSrc2 ? ((opcode2 == `OP_STORE) ? imm_s2 : imm_i2) : rs2_data2_fwd;
-    
-    wire [31:0] alu_Y1, alu_Y2, mac_Y1, mac_Y2;
-    
-    ALU u_alu1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(alu_Y1));
-    MAC u_mac1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(mac_Y1));
-    
-    ALU u_alu2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(alu_Y2));
-    MAC u_mac2 (.A(rs1_data2_fwd), .B(alu_B2), .ctrl(alu_ctrl2), .Y(mac_Y2));
-    
-    wire uses_mac1 = (alu_ctrl1 >= 5'd10 && alu_ctrl1 <= 5'd13);
-    wire uses_mac2 = (alu_ctrl2 >= 5'd10 && alu_ctrl2 <= 5'd13);
-    
-    wire [31:0] ex1_Y = uses_mac1 ? mac_Y1 : alu_Y1;
-    wire [31:0] ex2_Y = uses_mac2 ? mac_Y2 : alu_Y2;
-    
-    // JALR target calculation
-    wire [31:0] jalr_target1 = (rs1_data1 + imm_i1) & ~32'd1;
-
-    // =========================================================================
-    // Branch Logic
-    // =========================================================================
-    wire branch_taken1 = (opcode1 == `OP_BRANCH) && (
-        (funct3_1 == 3'b000 && rs1_data1 == rs2_data1) ||  // BEQ
-        (funct3_1 == 3'b001 && rs1_data1 != rs2_data1)     // BNE
-    );
-
-    // =========================================================================
-    // Memory Stage (Single-Cycle, No Pipelining)
-    // =========================================================================
-    wire [31:0] mem_rdata;
-    
-    // Memory always uses inst1 (since memory ops execute alone)
-    wire [31:0] mem_addr = ex1_Y;
-    wire [31:0] mem_wdata = rs2_data1;
-    wire mem_we = MemWrite1 && is_mem1;
-    
-    Data_MEM u_dmem (
-        .clk(clk),
-        .reset(reset),
-        .write_en(mem_we),
-        .address(mem_addr),
-        .write_DAT(mem_wdata),
-        .read_DAT(mem_rdata)
-    );
-
-    // =========================================================================
-    // Writeback Stage
-    // =========================================================================
-    reg wb_we1, wb_we2;
-    reg [4:0] wb_rd1, wb_rd2;
-    reg [31:0] wb_wdata1, wb_wdata2;
-    
-    // Writeback data selection
-    wire [31:0] wb_data1 = MemToReg1 ? mem_rdata : ex1_Y;
-    wire [31:0] wb_data2 = ex2_Y;  // inst2 never accesses memory
-    
-    always @(posedge clk) begin
-        if (reset) begin
-            wb_we1 <= 1'b0;
-            wb_we2 <= 1'b0;
-            wb_rd1 <= 5'd0;
-            wb_rd2 <= 5'd0;
-            wb_wdata1 <= 32'd0;
-            wb_wdata2 <= 32'd0;
-        end else begin
-            // Inst1 writeback (always valid after first cycle)
-            wb_we1 <= RegWrite1 && (rd1 != 5'd0) && inst2_valid;
-            wb_rd1 <= rd1;
-            wb_wdata1 <= wb_data1;
-            
-            // Inst2 writeback (only if issued and valid)
-            wb_we2 <= issue_inst2 && RegWrite2 && (rd2 != 5'd0) && inst2_valid;
-            wb_rd2 <= rd2;
-            wb_wdata2 <= wb_data2;
-        end
-    end
-
-    // =========================================================================
-    // PC Update and Instruction Fetch Logic
-    // =========================================================================
-    reg [31:0] pc_next;
-    
-    always @(*) begin
-        if (reset) begin
-            pc_next = 32'd0;
-        end else if (!inst2_valid) begin
-            // Initial fetch cycle - don't advance PC yet
-            pc_next = pc;
-        end else if (opcode1 == `OP_JAL) begin
-            pc_next = jal_target1;
-        end else if (opcode1 == `OP_JALR) begin
-            pc_next = jalr_target1;
-        end else if (branch_taken1) begin
-            pc_next = branch_target1;
-        end else begin
-            // Normal increment
-            if (issue_inst2) begin
-                pc_next = pc + 8;  // Both instructions executed
-            end else begin
-                pc_next = pc + 4;  // Only inst1 executed
-            end
-        end
-    end
-    
-    always @(posedge clk) begin
-        if (reset) begin
-            pc_reg <= 32'd0;
-            inst1_reg <= 32'd0;
-            inst2_reg <= 32'd0;
-            inst2_valid <= 1'b0;
-        end else begin
-            pc_reg <= pc_next;
-            
-            // Fetch logic with stall handling
-            if (!inst2_valid) begin
-                // Initial fetch after reset - load both instructions
-                inst1_reg <= inst1_f;
-                inst2_reg <= inst2_f;
-                inst2_valid <= 1'b1;
-            end else if (issue_inst2) begin
-                // Both instructions issued - fetch new pair
-                inst1_reg <= inst1_f;
-                inst2_reg <= inst2_f;
-                inst2_valid <= 1'b1;
-            end else begin
-                // Only inst1 issued - inst2 was stalled
-                // Promote inst2 to inst1, fetch new inst2
-                inst1_reg <= inst2_reg;
-                inst2_reg <= inst2_f;
-                inst2_valid <= 1'b1;
-            end
-        end
-    end
-
-    // =========================================================================
-    // Debug Output
-    // =========================================================================
-    always @(posedge clk) begin
-        if (!reset) begin
-            $display("t=%0t PC=%0d (byte_addr) inst1_fetch_addr=%0d inst2_fetch_addr=%0d", 
-                     $time, pc, pc, pc+4);
-            $display("  op1=%b op2=%b issue2=%b inst2_valid=%b", 
-                     opcode1, opcode2, issue_inst2, inst2_valid);
-            $display("  inst1_reg=%h (rd=%0d) inst2_reg=%h (rd=%0d)", 
-                     inst1_reg, rd1, inst2_reg, rd2);
-            
-            if (MemWrite1) begin
-                $display("  STORE: addr=%0d data=%h", mem_addr, mem_wdata);
-            end
-            
-            if (MemRead1) begin
-                $display("  LOAD: addr=%0d data=%h rd=%0d", mem_addr, mem_rdata, rd1);
-            end
-            
-            if (wb_we1) begin
-                $display("  WB1: rd=%0d data=%h", wb_rd1, wb_wdata1);
-            end
-            
-            if (wb_we2) begin
-                $display("  WB2: rd=%0d data=%h", wb_rd2, wb_wdata2);
-            end
-            $display("");
-        end
-    end
-
-endmodule
-
-*/
-
-
-/*
-`timescale 1ns / 1ps
-`include "opcodes.vh"
-
-module cpu(
-    input clk,
-    input reset
-    );
-
-    wire[31:0] pc;
-    wire[31:0] inst1, inst2;
-    wire [31:0] rs1_data1, rs2_data1, alu_B1;
-    wire [31:0] rs1_data2, rs2_data2, alu_B2;
-    wire [31:0] alu_Y1, mac_Y1, ex1_Y;
-    wire [31:0] alu_Y2, mac_Y2, ex2_Y;
-    //Control signals
-    wire RegWrite1, MemRead1, MemWrite1, MemToReg1, ALUSrc1, Branch1;
-    wire RegWrite2, MemRead2, MemWrite2, MemToReg2, ALUSrc2, Branch2;
-
-    // --- fetch latch signals ---
-    wire [31:0] inst1_f, inst2_f;   // raw outputs from Inst_MEM read
-    reg  [31:0] inst1_reg, inst2_reg; // latched fetched instructions
-    reg         pair_valid;         // true when inst1_reg/inst2_reg are valid
-
- 
-    // -------------------------
-    // PC logic
-    // -------------------------
-    reg fetch_stall_flag_reg; // registered flag, updates at posedge (0 = normal, 1 = second-cycle advancement)
-    reg [31:0] pc_next;
-
-    always @(*) begin
-    // default: hold (safe)
-        pc_next = pc;
-
-        if (reset) begin
-            pc_next = 32'd0;
-        end else if (branch_taken1_prev) begin
-            pc_next = branch_target1;
-        end else if (opcode1 == `OP_JAL) begin
-            pc_next = jal_target1;
-        end else if (opcode1 == `OP_JALR) begin
-            pc_next = jalr_target1;
-        end else begin
-            // Normal progression driven by registered fetch state (no combinational races)
-            if (issue_inst2_prev && !(mem_access1 || mem_access2)) begin
-                pc_next = pc + 8;    // both executed this cycle
-            end else begin
-                // we are in a 1-cycle stall for inst2: either hold pc (first cycle) or advance by +4 (second)
-                if (fetch_stall_flag_reg)
-                    pc_next = pc + 4;
-                else
-                    pc_next = pc;     // hold during initial stall cycle
-            end
-        end
-    end
-   
-    pc u_pc(
-        .clk(clk),
-        .reset(reset),
-        .pc_next(pc_next),
-        .pc(pc)
-    );
-
-    // -------------------------
-    // Instruction Memory
-    // -------------------------
-    //Inst_MEM u_Inst_MEM1(.address(pc),    .inst(inst1_f));
-    //Inst_MEM u_Inst_MEM2(.address(pc+4), .inst(inst2_f));
-
-
-    // --- FETCH LATCH: hold fetched instructions for decode ---
-    
-    // small FSM to handle hazard stalls without losing inst2.
-    // states are implicit via fetch_stall_flag:
-    //  - if pair_valid==0: fill pair from inst?_f
-    //  - else if pair_valid==1 and issue_inst2==1: both can issue => accept new pair
-    //  - else if pair_valid==1 and issue_inst2==0:
-    //      - first time: set fetch_stall_flag=1 and let inst1 execute (hold pair)
-    //      - next time (fetch_stall_flag==1): shift inst2->inst1, fetch new inst2 from inst2_f, clear fetch_stall_flag.
-    //
-    // This gives a single-cycle stall to let inst1 complete, then promotes inst2 so progress happens.
-    //reg fetch_stall_flag; // 0 = not in the middle of stall, 1 = we previously stalled and must shift now
-        // Synchronous PC + fetch FSM (ordered to avoid races)
-    reg [31:0] pc_reg;
-    wire [31:0] pc = pc_reg;
-
-    // Raw instruction memory outputs (combinational)
-    wire [31:0] inst1_f, inst2_f;
-    Inst_MEM u_Inst_MEM1(.address(pc_reg),    .inst(inst1_f));
-    Inst_MEM u_Inst_MEM2(.address(pc_reg+4), .inst(inst2_f));
-
-    // fetch FSM registers
-    reg        fetch_stall_flag_reg; // indicates we are in the second cycle of a stall
-    reg        pair_valid_reg;
-
-    // compute pc_next from CURRENT registered state (inst?_reg etc).
-    // Do this as local variables at start of clock cycle (snapshot).
-    reg [31:0] pc_next_local;
-    reg        next_fetch_stall;
-    reg [31:0] next_inst1_reg;
-    reg [31:0] next_inst2_reg;
-    reg        next_pair_valid;
-
-    always @(*) begin
-        // default to current values (safe)
-        pc_next_local = pc_reg;
-        next_inst1_reg = inst1_reg;
-        next_inst2_reg = inst2_reg;
-        next_pair_valid = pair_valid_reg;
-        next_fetch_stall = fetch_stall_flag_reg;
-
-        // --- Decide pc_next using the *current* inst?_reg and derived signals ---
-        // The signals below (opcode1, branch_taken1, issue_inst2, jal_target1, etc)
-        // are wires derived from inst1_reg/inst2_reg and other current state.
-        if (reset) begin
-            pc_next_local = 32'd0;
-        end else if (opcode1 == `OP_JAL) begin
-            pc_next_local = jal_target1;
-        end else if (opcode1 == `OP_JALR) begin
-            pc_next_local = jalr_target1;
-        end else if (branch_taken1) begin
-            pc_next_local = branch_target1;
-        end else begin
-            if (issue_inst2) begin
-                pc_next_local = pc_reg + 8;
-            end else begin
-                if (fetch_stall_flag_reg)
-                    pc_next_local = pc_reg + 4;
-                else
-                    pc_next_local = pc_reg; // hold
-            end
-        end
-
-        // --- Decide fetch latch next-state (still based on current pair_valid & issue_inst2) ---
-        if (!pair_valid_reg) begin
-            next_inst1_reg    = inst1_f;
-            next_inst2_reg    = inst2_f;
-            next_pair_valid   = 1'b1;
-            next_fetch_stall  = 1'b0;
-        end else begin
-            if (issue_inst2) begin
-                // both issued -> accept new fetched pair
-                next_inst1_reg   = inst1_f;
-                next_inst2_reg   = inst2_f;
-                next_pair_valid  = 1'b1;
-                next_fetch_stall = 1'b0;
-            end else begin
-                // stall case
-                if (!fetch_stall_flag_reg) begin
-                    // first stall cycle: hold
-                    next_inst1_reg   = inst1_reg;
-                    next_inst2_reg   = inst2_reg;
-                    next_pair_valid  = 1'b1;
-                    next_fetch_stall = 1'b1;
-                end else begin
-                    // second cycle: promote inst2 -> inst1, fetch new inst2
-                    next_inst1_reg   = inst2_reg;
-                    next_inst2_reg   = inst2_f;
-                    next_pair_valid  = 1'b1;
-                    next_fetch_stall = 1'b0;
-                end
-            end
-        end
-    end
-
-    // Apply the clocked updates in one place (non-blocking), using the precomputed values.
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            pc_reg <= 32'd0;
-            inst1_reg <= 32'd0;
-            inst2_reg <= 32'd0;
-            pair_valid_reg <= 1'b0;
-            fetch_stall_flag_reg <= 1'b0;
-        end else begin
-            pc_reg <= pc_next_local;
-            inst1_reg <= next_inst1_reg;
-            inst2_reg <= next_inst2_reg;
-            pair_valid_reg <= next_pair_valid;
-            fetch_stall_flag_reg <= next_fetch_stall;
-        end
-    end
-
-    // expose small helpers for debug
-    wire fetch_stall_flag = fetch_stall_flag_reg;
-    wire pair_valid = pair_valid_reg;
-    
-
-// These are the ones used for decode:
-assign inst1 = inst1_reg;
-assign inst2 = inst2_reg;
-
-    // -------------------------
-    // Instruction decode
-    // -------------------------
-    // Instruction 1
-    wire [6:0] opcode1 = inst1_reg[6:0];
-    wire [4:0] rd1 = inst1_reg[11:7];
-    wire [2:0] funct3_1 = inst1_reg[14:12];
-    wire [4:0] rs1_1 = inst1_reg[19:15];
-    wire [4:0] rs2_1 = inst1_reg[24:20];
-    wire [6:0] funct7_1 = inst1_reg[31:25];
-
-    // Instruction 2
-    wire [6:0] opcode2 = inst2_reg[6:0];
-    wire [4:0] rd2 = inst2_reg[11:7];
-    wire [2:0] funct3_2 = inst2_reg[14:12];
-    wire [4:0] rs1_2 = inst2_reg[19:15];
-    wire [4:0] rs2_2 = inst2_reg[24:20];
-    wire [6:0] funct7_2 = inst2_reg[31:25];
-
-    // -------------- Immediate Gen --------------
-    wire [31:0] imm_i1 = {{20{inst1_reg[31]}}, inst1_reg[31:20]};
-    wire [31:0] imm_s1 = {{20{inst1_reg[31]}}, inst1_reg[31:25], inst1_reg[11:7]};
-    wire [31:0] imm_b1 = {{19{inst1_reg[31]}}, inst1_reg[31], inst1_reg[7], inst1_reg[30:25], inst1_reg[11:8], 1'b0};
-    wire [31:0] imm_j1 = {{11{inst1_reg[31]}}, inst1_reg[31], inst1_reg[19:12], inst1_reg[20], inst1_reg[30:21], 1'b0};
-    wire [31:0] signext_imm_j1 = {{11{imm_j1[20]}}, imm_j1};
-    wire [31:0] jal_target1 = pc + signext_imm_j1;
-    wire [31:0] jalr_target1 = (rs1_data1 + imm_i1) & ~32'd1;
-    wire [31:0] branch_target1 = pc + imm_b1;
-
-    wire [31:0] imm_i2 = {{20{inst2_reg[31]}}, inst2_reg[31:20]};
-    wire [31:0] imm_s2 = {{20{inst2_reg[31]}}, inst2_reg[31:25], inst2_reg[11:7]};
-    wire [31:0] imm_b2 = {{19{inst2_reg[31]}}, inst2_reg[31], inst2_reg[7], inst2_reg[30:25], inst2_reg[11:8], 1'b0};
-
-     //----------------------------------------------------------------------------------------------------------------------------
-    // -------------------------
-    // Functional-unit usage signals & structural hazards
-    // -------------------------
-    // Determine whether instruction uses ALU-like ops (arithmetic/logic/branches/jalr)
-    // We treat R-type, I-type ALU ops, branch, JALR/JAL as ALU users (JAL uses PC math but doesn't use ALU result)
-    // Adjust the opcode checks to match your opcodes.vh definitions.
-    wire uses_mem1 = (opcode1 == `OP_LOAD) || (opcode1 == `OP_STORE);
-    wire uses_mem2 = (opcode2 == `OP_LOAD) || (opcode2 == `OP_STORE);
-
-    // M-extension (MAC) detected from alu_ctrl range (10..13 used earlier)
-    wire uses_mac1 = (alu_ctrl1 >= 5'd10 && alu_ctrl1 <= 5'd13);
-    wire uses_mac2 = (alu_ctrl2 >= 5'd10 && alu_ctrl2 <= 5'd13);
-
-    // ALU usage: ops that use ALU (R-type, I-type arithmetic/logical, branch target/jalr calc)
-    // Adjust/add opcodes if your ISA defines more ALU-using opcodes
-    wire uses_alu1 = (opcode1 == `OP_RTYPE) || (opcode1 == `OP_ITYPE) || (opcode1 == `OP_BRANCH) || (opcode1 == `OP_JALR) || (opcode1 == `OP_JAL);
-    wire uses_alu2 = (opcode2 == `OP_RTYPE) || (opcode2 == `OP_ITYPE    ) || (opcode2 == `OP_BRANCH) || (opcode2 == `OP_JALR) || (opcode2 == `OP_JAL);
-
-    // If an instruction maps to MAC (M-extension), treat it as MAC user, not ALU user:
-    assign uses_alu1 = uses_alu1 & ~uses_mac1;
-    assign uses_alu2 = uses_alu2 & ~uses_mac2;
-
-    // Availability of parallel functional units in your microarchitecture:
-    // - You currently have two ALU+MAC instances in the design, so ALU/MAC parallelism exists.
-    // - Data memory is single-ported (we used a single Data_MEM instance). Adjust if you add a second memory port.
-    localparam dual_alu_available = 1'b1;
-    localparam dual_mac_available = 1'b1;
-    localparam dual_mem_available = 1'b0;
-
-    // Structural hazard detection:
-    // if both instructions require the same single-ported resource and only one instance exists => structural hazard.
-    wire structural_alu_hazard = (uses_alu1 && uses_alu2 && !dual_alu_available);
-    wire structural_mac_hazard = (uses_mac1 && uses_mac2 && !dual_mac_available);
-    wire structural_mem_hazard = (uses_mem1 && uses_mem2 && !dual_mem_available);
-
-    wire structural_hazard = structural_alu_hazard | structural_mac_hazard | structural_mem_hazard;
-
-    // -------------------------
-    // RAW / WAW / Load-use hazard checks
-    // -------------------------
-    // RAW: inst2 reads a reg that inst1 will write (and inst1 actually writes)
-    wire raw_hazard_rs1 = (rd1 != 5'd0) && ((rd1 == rs1_2));
-    wire raw_hazard_rs2 = (rd1 != 5'd0) && ((rd1 == rs2_2));
-    wire raw_hazard = (RegWrite1) && (raw_hazard_rs1 || raw_hazard_rs2);
-
-    // WAW: both write the same destination register
-    wire waw_hazard = (rd1 != 5'd0) && (rd1 == rd2) && RegWrite1 && RegWrite2;
-
-    // Load-use: inst1 is a load and inst2 reads the loaded register — cannot forward in a single-cycle memory model
-    wire load_use_hazard = (opcode1 == `OP_LOAD) && ((rd1 == rs1_2) || (rd1 == rs2_2));
-
-    // -------------------------
-    // Final hazard and issue logic
-    // -------------------------
-    // If any hazard exists, do not issue inst2 this cycle.
-    wire any_hazard = raw_hazard | waw_hazard | load_use_hazard | structural_hazard;
-
-    // issue_inst2 should be 1 only if no hazard and other checks (like reset) allow it.
-    assign issue_inst2 = (~any_hazard) && (~mem_access1) && (~mem_access2); //wire that enables superscalar execution 
-    //currently disabled for load/store operations since there is a bug with writeback
-    //assign issue_inst2 = 1'b0; // enable this to disable superscalar execution
-
-    // --- Sampled control snapshot for next-cycle PC logic ---
-    reg issue_inst2_prev;
-    reg branch_taken1_prev;
-
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            issue_inst2_prev   <= 1'b0;
-            branch_taken1_prev <= 1'b0;
-        end else begin
-            issue_inst2_prev   <= issue_inst2;
-            branch_taken1_prev <= branch_taken1;
-        end
-    end
-
-
-    //----------------------------------------------------------------------------------------------------------------------------
-    //Control signals per instruction
-    control_unit u_ctrl1 (
-        .opcode  (opcode1),
-        .RegWrite(RegWrite1),
-        .MemRead (MemRead1),
-        .MemWrite(MemWrite1),
-        .MemToReg(MemToReg1),
-        .ALUSrc  (ALUSrc1),
-        .Branch  (Branch1)   // not used yet
-    );
-
-    control_unit u_ctrl2 (
-        .opcode  (opcode2),
-        .RegWrite(RegWrite2),
-        .MemRead (MemRead2),
-        .MemWrite(MemWrite2),
-        .MemToReg(MemToReg2),
-        .ALUSrc  (ALUSrc2),
-        .Branch  (Branch2)   // not used yet
-    );
-    
-
-    // Writeback / issue gating
-
-    // Which instructions actually issue this cycle?
-    // inst1 is always issued (in this simple in-order design) when not in reset.
-    // inst2 is only issued when issue_inst2 is true (and not in reset).
-    wire inst1_issued = ~reset;               // or use a more precise valid-for-issue if you have one
-    wire inst2_issued = (~reset) && issue_inst2;
-
-    // Choose writeback data (load uses mem_rdata)
-    wire [31:0] wb_data1 = (MemToReg1) ? mem_rdata : ex1_Y;
-    wire [31:0] wb_data2 = (MemToReg2) ? mem_rdata : ex2_Y;
-
-    
-    // If both instructions write to the same destination in the same cycle, block instr2 write
-    // (WAW resolution: priority to inst1)
-    wire write2_blocked_waw = (rd1 != 5'd0) && (rd1 == rd2) && RegWrite1 && RegWrite2 && inst1_issued && inst2_issued;
-  
-
-    // -------------- ALU Control --------------
-    wire [4:0] alu_ctrl1;
-    alu_control u_alu_ctrl1 (
-        .opcode(opcode1),
-        .funct3(funct3_1),
-        .funct7(funct7_1),
-        .ctrl(alu_ctrl1)
-    );
-
-    wire [4:0] alu_ctrl2;
-    alu_control u_alu_ctrl2 (
-        .opcode(opcode2),
-        .funct3(funct3_2),
-        .funct7(funct7_2),
-        .ctrl(alu_ctrl2)
-    );
-
-    // ---------- Simple EX->EX forwarding for inst2 ----------
-    wire [31:0] rs1_val2_forwarded = (RegWrite1 && (rd1 != 5'd0) && (rd1 == rs1_2)) ? ex1_Y : rs1_data2;
-    wire [31:0] rs2_val2_forwarded = (RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_2)) ? ex1_Y : rs2_data2;
-
-
-    // -------------- ALU/MAC EX --------------
-    assign alu_B1 = (ALUSrc1) ? ((opcode1 == `OP_STORE) ? imm_s1 : imm_i1) : rs2_data1;
-    assign alu_B2 = (ALUSrc2) ? ((opcode2 == `OP_STORE) ? imm_s2 : imm_i2) : rs2_val2_forwarded;
-
-    ALU u_alu1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(alu_Y1));
-    MAC u_mac1 (.A(rs1_data1), .B(alu_B1), .ctrl(alu_ctrl1), .Y(mac_Y1));
-    assign ex1_Y = (alu_ctrl1 >= 10 && alu_ctrl1 <= 13) ? mac_Y1 : alu_Y1;
-
-    ALU u_alu2 (.A(rs1_val2_forwarded), .B(alu_B2), .ctrl(alu_ctrl2), .Y(alu_Y2));
-    MAC u_mac2 (.A(rs1_val2_forwarded), .B(alu_B2), .ctrl(alu_ctrl2), .Y(mac_Y2));
-    assign ex2_Y = (alu_ctrl2 >= 10 && alu_ctrl2 <= 13) ? mac_Y2 : alu_Y2;
-
-    // -------------- Branch logic --------------
-    wire branch_taken1;
-    assign branch_taken1 = (opcode1 == `OP_BRANCH) && (
-        (funct3_1 == 3'b000 && rs1_data1 == rs2_data1) || // BEQ
-        (funct3_1 == 3'b001 && rs1_data1 != rs2_data1)    // BNE
-    );
-
-
-     // -------------------------
-    // Memory access selection (existing logic)
-    // -------------------------
-    wire mem_access1 = MemRead1 | MemWrite1;
-    wire mem_access2 = MemRead2 | MemWrite2;
-    wire choose_inst1_for_mem = mem_access1; // priority to inst1 when both request (structural hazard should prevent this)
-
-    // forwarded store data for memory writes (keeps your forwarding)
-    wire [31:0] rs2_val1_forwarded = (RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_1)) ? ex1_Y : rs2_data1;
-    wire [31:0] rs2_val2_forwarded = (RegWrite1 && (rd1 != 5'd0) && (rd1 == rs2_2)) ? ex1_Y : rs2_data2;
-    wire [31:0] rs1_val1_forwarded = (RegWrite2 && (rd2 != 5'd0) && (rd2 == rs1_1)) ? ex2_Y : rs1_data1;
-
-    wire [31:0] dmem_addr  = choose_inst1_for_mem ? ex1_Y : ex2_Y;
-    wire [31:0] dmem_wdata = choose_inst1_for_mem ? rs2_val1_forwarded : rs2_val2_forwarded;
-    wire        dmem_we    = choose_inst1_for_mem ? MemWrite1 : MemWrite2;
-
-    // instantiate Data_MEM (keep your instrumented DMEM for debugging or the final DMEM module)
-    //Data_MEM u_dmem (
-    //    .clk       (clk),
-    //    .reset     (reset),
-    //    .write_en  (dmem_we),
-    //    .address   (dmem_addr),
-    //    .write_DAT (dmem_wdata),
-    //    .read_DAT  (mem_rdata)
-    //);
-    // -------------------------
-    // MEM -> WB response pipeline (1-cycle)
-    // - When the load is selected (mem_access and MemRead), capture mem_rdata and the destination rd.
-    // - On next clock we will use mem_resp_* to drive register writes for the load.
-    // This avoids races where mem_rdata becomes visible *after* the register file sampled it.
-    // -------------------------
-
-    // --- mem read pending latch ---
-    reg        mem_resp_valid;
-    reg [4:0]  mem_resp_rd;
-    reg [31:0] mem_resp_data;
-
-    reg        load_req;         // set when a load is issued (cycle N)
-    reg        load_pending;     // stage1 (cycle N+1)
-    reg        load_pending2;    // stage2 (cycle N+2)
-    reg  [4:0] load_rd_stage1;
-    reg  [4:0] load_rd_stage2;
-
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            load_req       <= 1'b0;
-            load_pending   <= 1'b0;
-            load_pending2  <= 1'b0;
-            load_rd_stage1 <= 5'd0;
-            load_rd_stage2 <= 5'd0;
-        end else begin
-            // Stage the load request on issue (cycle N)
-            if (choose_inst1_for_mem && MemRead1) begin
-                load_req       <= 1'b1;
-                load_rd_stage1 <= rd1;
-            end else if ((!choose_inst1_for_mem) && MemRead2) begin
-                load_req       <= 1'b1;
-                load_rd_stage1 <= rd2;
-            end else begin
-                load_req <= 1'b0;
-            end
-
-            // Progress pipeline: stage1 <- load_req, stage2 <- stage1
-            load_pending  <= load_req;
-            load_pending2 <= load_pending;
-
-            // pipeline rd as well
-            load_rd_stage2 <= load_rd_stage1;
-        end
-    end
-
-    // Now capture mem_rdata when load_pending2==1 (cycle N+2),
-    // because Data_MEM's read_DAT is valid one cycle after the address was applied.
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            mem_resp_valid <= 1'b0;
-            mem_resp_rd    <= 5'd0;
-            mem_resp_data  <= 32'd0;
-        end else begin
-            if (load_pending2) begin
-                mem_resp_valid <= 1'b1;
-                mem_resp_rd    <= load_rd_stage2;
-                mem_resp_data  <= mem_rdata; // mem_rdata now stable
-            end else begin
-                mem_resp_valid <= 1'b0;
-                mem_resp_rd    <= 5'd0;
-                mem_resp_data  <= 32'd0;
-            end
-        end
-    end
-
-    // -------------------------
-    // WB selection and register-file interface
-    // - For ALU / MAC / non-load writes, we keep your original reg_we and wb_data immediate write behavior.
-    // - For loads, we suppress the immediate write and instead use mem_resp_* the following cycle.
-    // -------------------------
-
-    // original immediate reg write enables from control + issue gating (inst issued earlier)
-    wire reg_we1_immediate = RegWrite1 & inst1_issued; // stays as before for non-loads
-    wire reg_we2_immediate = RegWrite2 & inst2_issued;
-
-    // If instruction is a load, do not perform immediate write (we'll handle via mem_resp)
-    wire reg_we1_final = reg_we1_immediate & ~MemToReg1;
-    wire reg_we2_final = reg_we2_immediate & ~MemToReg2;
-
-    // Prepare immediate WB data for non-loads (ALU/MAC)
-    wire [31:0] wb_data1_imm = ex1_Y;
-    wire [31:0] wb_data2_imm = ex2_Y;
-
-    // Now create the "writeback stage" registers that drive the register file's two write ports.
-    // We'll use these to write either immediate ALU results (same-cycle) or load responses (from mem_resp next cycle).
-    reg        wb_we1_reg;
-    reg        wb_we2_reg;
-    reg  [4:0] wb_rd1_reg;
-    reg  [4:0] wb_rd2_reg;
-    reg [31:0] wb_wdata1_reg;
-    reg [31:0] wb_wdata2_reg;
-
-    // On each clock, build the WB outputs. Priority: if mem_resp_valid, it will use one write port
-    // (we choose port1 for mem_resp if available; port arbitration is simple here).
-    always @(posedge clk) begin
-        if (reset) begin
-            wb_we1_reg   <= 1'b0;
-            wb_we2_reg   <= 1'b0;
-            wb_rd1_reg   <= 5'd0;
-            wb_rd2_reg   <= 5'd0;
-            wb_wdata1_reg<= 32'd0;
-            wb_wdata2_reg<= 32'd0;
-        end else begin
-            // Default: clear
-            wb_we1_reg   <= 1'b0;
-            wb_we2_reg   <= 1'b0;
-            wb_rd1_reg   <= 5'd0;
-            wb_rd2_reg   <= 5'd0;
-            wb_wdata1_reg<= 32'd0;
-            wb_wdata2_reg<= 32'd0;
-
-            // 1) If we have a memory response from previous cycle, commit it now.
-            if (mem_resp_valid) begin
-                // Write the mem response into port1 (try to prefer port1)
-                // If mem_resp_rd == 0 (x0) it will be ignored inside regfile
-                wb_we1_reg    <= 1'b1;
-                wb_rd1_reg    <= mem_resp_rd;
-                wb_wdata1_reg <= mem_resp_data;
-
-                // Also, allow an immediate ALU result to use port2 this same cycle if present
-                if (reg_we1_final) begin
-                    // ALU result for inst1 — but port1 already used by mem_resp, try using port2.
-                    wb_we2_reg    <= reg_we1_final;
-                    wb_rd2_reg    <= rd1;
-                    wb_wdata2_reg <= wb_data1_imm;
-                end else if (reg_we2_final) begin
-                    // inst2 ALU result can use port2
-                    wb_we2_reg    <= reg_we2_final;
-                    wb_rd2_reg    <= rd2;
-                    wb_wdata2_reg <= wb_data2_imm;
-                end
-            end else begin
-                // No memory response pending — commit immediate ALU/MAC writes for inst1 and inst2 (if any)
-                // Port1 <- inst1, Port2 <- inst2
-                wb_we1_reg    <= reg_we1_final;
-                wb_rd1_reg    <= rd1;
-                wb_wdata1_reg <= wb_data1_imm;
-
-                wb_we2_reg    <= reg_we2_final;
-                wb_rd2_reg    <= rd2;
-                wb_wdata2_reg <= wb_data2_imm;
-            end
-        end
-    end
-
-    register_file_dual u_regfile (
-        .clk(clk),
-        .reset(reset),
-        .we1(wb_we1_reg),
-        .we2(wb_we2_reg),
-        .rs1_1(rs1_1),
-        .rs2_1(rs2_1),
-        .rs1_2(rs1_2),
-        .rs2_2(rs2_2),
-        .rd1(wb_rd1_reg),
-        .rd2(wb_rd2_reg),
-        .wdata1(wb_wdata1_reg),
-        .wdata2(wb_wdata2_reg),
-        .rdata1_1(rs1_data1),
-        .rdata2_1(rs2_data1),
-        .rdata1_2(rs1_data2),
-        .rdata2_2(rs2_data2)
-    );
-
-    
-
-    // -------------------------
-    // Debug prints
-    // -------------------------
-    wire [31:0] dbg_pc_next = pc_next;
-    wire dbg_issue2 = issue_inst2;
-    wire [6:0] dbg_op1 = opcode1;
-    wire [6:0] dbg_op2 = opcode2;
-
-    always @(posedge clk) begin
-        // Whenever a memory access is issued, print detailed context
-        if (choose_inst1_for_mem && (MemRead1 || MemWrite1)) begin
-            $display("CPU_MEM1_ISSUE t=%0t pc=%0d op=%b MemRead1=%b MemWrite1=%b rd1=%0d rs1_1=%0d rs2_1=%0d imm_i1=%0d imm_s1=%0d ex1_Y=%0d dmem_idx=%0d dmem_wdata=%h",
-                    $time, pc_reg, opcode1, MemRead1, MemWrite1, rd1, rs1_1, rs2_1, imm_i1, imm_s1, ex1_Y, ex1_Y[9:2], rs2_val1_forwarded);
-        end
-        if ((!choose_inst1_for_mem) && (MemRead2 || MemWrite2)) begin
-            $display("CPU_MEM2_ISSUE t=%0t pc=%0d op=%b MemRead2=%b MemWrite2=%b rd2=%0d rs1_2=%0d rs2_2=%0d imm_i2=%0d imm_s2=%0d ex2_Y=%0d dmem_idx=%0d dmem_wdata=%h",
-                    $time, pc_reg, opcode2, MemRead2, MemWrite2, rd2, rs1_2, rs2_2, imm_i2, imm_s2, ex2_Y, ex2_Y[9:2], rs2_val2_forwarded);
-        end
-
-    end 
-
-endmodule
-
-/*
-    reg        mem_resp_valid;
-    reg  [4:0] mem_resp_rd;
-    reg [31:0] mem_resp_data;
-
-    // --- Added: capture load address for delayed read ---
-    reg [31:0] pending_load_addr;
-    reg [4:0]  pending_load_rd;
-    reg        pending_load_active;
-
-    // --- Modified: delayed memory response (data captured one cycle after address) ---
-    always @(posedge clk) begin
-    if (reset) begin
-        pending_load_addr   <= 32'd0;
-        pending_load_rd     <= 5'd0;
-        pending_load_active <= 1'b0;
-    end else begin
-        // default: clear flag unless new load issued
-        pending_load_active <= 1'b0;
-
-        // when a load is issued (choose_inst1_for_mem ensures single port)
-        if (choose_inst1_for_mem && MemRead1) begin
-            pending_load_addr   <= dmem_addr;
-            pending_load_rd     <= rd1;
-            pending_load_active <= 1'b1;
-        end else if ((!choose_inst1_for_mem) && MemRead2) begin
-            pending_load_addr   <= dmem_addr;
-            pending_load_rd     <= rd2;
-            pending_load_active <= 1'b1;
-        end
-    end
-end
-
-    // Capture response on cycle where memory was accessed for read (choose_inst1_for_mem selects which one)
-    // We capture the current mem_rdata (combinational) into a register at posedge.
-    // --- Modified: delayed memory response (data captured one cycle after address) ---
-    always @(posedge clk) begin
-        if (reset) begin
-            mem_resp_valid <= 1'b0;
-            mem_resp_rd    <= 5'd0;
-            mem_resp_data  <= 32'd0;
-        end else begin
-            // Default clear
-            mem_resp_valid <= 1'b0; 
-            mem_resp_rd    <= 5'd0;
-            mem_resp_data  <= 32'd0;
-
-            // One cycle after the load was issued, capture the stable data
-            if (pending_load_active) begin
-                mem_resp_valid <= 1'b1;
-                mem_resp_rd    <= pending_load_rd;
-                mem_resp_data  <= u_dmem.mem[pending_load_addr[7:0]]; 
-                // ^ direct access to internal array (works in sim)
-                // or mem_rdata if you make Data_MEM synchronous
-            end
-        end
-    end
-
-
-
-
-
-
-
-   // -------------------------
-    // Simulation-only data memory (simple, reliable)
-    // -------------------------
-    reg [31:0] sim_mem [0:255]; // 256 words
-    integer sm_i;
-    wire [7:0] sim_mem_index = dmem_addr[9:2]; // use byte-indexing for now (matches your working case)
-
-    // combinational read from sim_mem (instant)
-    wire [31:0] sim_mem_rdata;
-    assign sim_mem_rdata = sim_mem[sim_mem_index];
-
-    // synchronous write into sim_mem (updates at posedge)
-    always @(posedge clk) begin
-        if (reset) begin
-            for (sm_i = 0; sm_i < 256; sm_i = sm_i + 1) sim_mem[sm_i] <= 32'd0;
-        end else begin
-            if (dmem_we) begin
-                sim_mem[sim_mem_index] <= dmem_wdata;
-                $display("SIM_MEM_WRITE t=%0t idx=%0d addr=%0d data=%h", $time, sim_mem_index, dmem_addr, dmem_wdata);
-            end
-        end
-    end
-    wire [31:0] mem_rdata;
-    assign mem_rdata = sim_mem[dmem_addr[7:0]];
 
 */

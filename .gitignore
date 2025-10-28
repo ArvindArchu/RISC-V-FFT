@@ -1,0 +1,7 @@
+sources_1/new/bitrev_unit.v
+sources_1/new/fft_accel.v
+sources_1/new/scaling_norm.v
+sources_1/new/twiddle_rom.v
+sources_1/new/fft_top.v
+sources_1/new/fft_interface.v
+sources_1/new/butterfly_radix2.v
