@@ -1,0 +1,73 @@
+module bit_reverse_64 (
+    input  signed [15:0] in_r [0:63],
+    input  signed [15:0] in_i [0:63],
+    output signed [15:0] out_r[0:63],
+    output signed [15:0] out_i[0:63]
+);
+    // 6-bit reversal for 64 points
+    assign out_r[0]  = in_r[0];   assign out_i[0]  = in_i[0];   // 000000 → 000000
+    assign out_r[1]  = in_r[32];  assign out_i[1]  = in_i[32];  // 000001 → 100000
+    assign out_r[2]  = in_r[16];  assign out_i[2]  = in_i[16];  // 000010 → 010000
+    assign out_r[3]  = in_r[48];  assign out_i[3]  = in_i[48];  // 000011 → 110000
+    assign out_r[4]  = in_r[8];   assign out_i[4]  = in_i[8];   // 000100 → 001000
+    assign out_r[5]  = in_r[40];  assign out_i[5]  = in_i[40];  // 000101 → 101000
+    assign out_r[6]  = in_r[24];  assign out_i[6]  = in_i[24];  // 000110 → 011000
+    assign out_r[7]  = in_r[56];  assign out_i[7]  = in_i[56];  // 000111 → 111000
+    assign out_r[8]  = in_r[4];   assign out_i[8]  = in_i[4];   // 001000 → 000100
+    assign out_r[9]  = in_r[36];  assign out_i[9]  = in_i[36];  // 001001 → 100100
+    assign out_r[10] = in_r[20];  assign out_i[10] = in_i[20];  // 001010 → 010100
+    assign out_r[11] = in_r[52];  assign out_i[11] = in_i[52];  // 001011 → 110100
+    assign out_r[12] = in_r[12];  assign out_i[12] = in_i[12];  // 001100 → 001100
+    assign out_r[13] = in_r[44];  assign out_i[13] = in_i[44];  // 001101 → 101100
+    assign out_r[14] = in_r[28];  assign out_i[14] = in_i[28];  // 001110 → 011100
+    assign out_r[15] = in_r[60];  assign out_i[15] = in_i[60];  // 001111 → 111100
+    assign out_r[16] = in_r[2];   assign out_i[16] = in_i[2];   // 010000 → 000010
+    assign out_r[17] = in_r[34];  assign out_i[17] = in_i[34];  // 010001 → 100010
+    assign out_r[18] = in_r[18];  assign out_i[18] = in_i[18];  // 010010 → 010010
+    assign out_r[19] = in_r[50];  assign out_i[19] = in_i[50];  // 010011 → 110010
+    assign out_r[20] = in_r[10];  assign out_i[20] = in_i[10];  // 010100 → 001010
+    assign out_r[21] = in_r[42];  assign out_i[21] = in_i[42];  // 010101 → 101010
+    assign out_r[22] = in_r[26];  assign out_i[22] = in_i[26];  // 010110 → 011010
+    assign out_r[23] = in_r[58];  assign out_i[23] = in_i[58];  // 010111 → 111010
+    assign out_r[24] = in_r[6];   assign out_i[24] = in_i[6];   // 011000 → 000110
+    assign out_r[25] = in_r[38];  assign out_i[25] = in_i[38];  // 011001 → 100110
+    assign out_r[26] = in_r[22];  assign out_i[26] = in_i[22];  // 011010 → 010110
+    assign out_r[27] = in_r[54];  assign out_i[27] = in_i[54];  // 011011 → 110110
+    assign out_r[28] = in_r[14];  assign out_i[28] = in_i[14];  // 011100 → 001110
+    assign out_r[29] = in_r[46];  assign out_i[29] = in_i[46];  // 011101 → 101110
+    assign out_r[30] = in_r[30];  assign out_i[30] = in_i[30];  // 011110 → 011110
+    assign out_r[31] = in_r[62];  assign out_i[31] = in_i[62];  // 011111 → 111110
+    assign out_r[32] = in_r[1];   assign out_i[32] = in_i[1];   // 100000 → 000001
+    assign out_r[33] = in_r[33];  assign out_i[33] = in_i[33];  // 100001 → 100001
+    assign out_r[34] = in_r[17];  assign out_i[34] = in_i[17];  // 100010 → 010001
+    assign out_r[35] = in_r[49];  assign out_i[35] = in_i[49];  // 100011 → 110001
+    assign out_r[36] = in_r[9];   assign out_i[36] = in_i[9];   // 100100 → 001001
+    assign out_r[37] = in_r[41];  assign out_i[37] = in_i[41];  // 100101 → 101001
+    assign out_r[38] = in_r[25];  assign out_i[38] = in_i[25];  // 100110 → 011001
+    assign out_r[39] = in_r[57];  assign out_i[39] = in_i[57];  // 100111 → 111001
+    assign out_r[40] = in_r[5];   assign out_i[40] = in_i[5];   // 101000 → 000101
+    assign out_r[41] = in_r[37];  assign out_i[41] = in_i[37];  // 101001 → 100101
+    assign out_r[42] = in_r[21];  assign out_i[42] = in_i[21];  // 101010 → 010101
+    assign out_r[43] = in_r[53];  assign out_i[43] = in_i[53];  // 101011 → 110101
+    assign out_r[44] = in_r[13];  assign out_i[44] = in_i[13];  // 101100 → 001101
+    assign out_r[45] = in_r[45];  assign out_i[45] = in_i[45];  // 101101 → 101101
+    assign out_r[46] = in_r[29];  assign out_i[46] = in_i[29];  // 101110 → 011101
+    assign out_r[47] = in_r[61];  assign out_i[47] = in_i[61];  // 101111 → 111101
+    assign out_r[48] = in_r[3];   assign out_i[48] = in_i[3];   // 110000 → 000011
+    assign out_r[49] = in_r[35];  assign out_i[49] = in_i[35];  // 110001 → 100011
+    assign out_r[50] = in_r[19];  assign out_i[50] = in_i[19];  // 110010 → 010011
+    assign out_r[51] = in_r[51];  assign out_i[51] = in_i[51];  // 110011 → 110011
+    assign out_r[52] = in_r[11];  assign out_i[52] = in_i[11];  // 110100 → 001011
+    assign out_r[53] = in_r[43];  assign out_i[53] = in_i[43];  // 110101 → 101011
+    assign out_r[54] = in_r[27];  assign out_i[54] = in_i[27];  // 110110 → 011011
+    assign out_r[55] = in_r[59];  assign out_i[55] = in_i[59];  // 110111 → 111011
+    assign out_r[56] = in_r[7];   assign out_i[56] = in_i[7];   // 111000 → 000111
+    assign out_r[57] = in_r[39];  assign out_i[57] = in_i[39];  // 111001 → 100111
+    assign out_r[58] = in_r[23];  assign out_i[58] = in_i[23];  // 111010 → 010111
+    assign out_r[59] = in_r[55];  assign out_i[59] = in_i[55];  // 111011 → 110111
+    assign out_r[60] = in_r[15];  assign out_i[60] = in_i[15];  // 111100 → 001111
+    assign out_r[61] = in_r[47];  assign out_i[61] = in_i[47];  // 111101 → 101111
+    assign out_r[62] = in_r[31];  assign out_i[62] = in_i[31];  // 111110 → 011111
+    assign out_r[63] = in_r[63];  assign out_i[63] = in_i[63];  // 111111 → 111111
+
+endmodule

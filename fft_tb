@@ -1,0 +1,138 @@
+`timescale 1ns/1ps
+
+module fft64_tb;
+
+    reg clk;
+
+    // 64-point complex input
+    reg signed [15:0] in_r [0:63];
+    reg signed [15:0] in_i [0:63];
+
+    // Output select
+    reg [5:0] sel;
+
+    // Outputs
+    wire signed [15:0] out_r;
+    wire signed [15:0] out_i;
+
+    // Instantiate DUT
+    fft64_q214_top dut (
+        .clk(clk),
+        .in_r(in_r),
+        .in_i(in_i),
+        .sel(sel),
+        .out_r(out_r),
+        .out_i(out_i)
+    );
+
+    // Clock
+    always #5 clk = ~clk;
+
+    integer k;
+
+    // Look Up Table for test 3 
+    // x[n] = exp(j*2*pi*5*n/64)
+    reg signed [15:0] cos_lut [0:63];
+    reg signed [15:0] sin_lut [0:63];
+
+    real phase;
+    real PI = 3.141592653589793;
+
+
+    initial begin
+        for (k = 0; k < 64; k = k + 1) begin
+            phase = 2.0 * PI * 5.0 * k / 64.0;
+            cos_lut[k] = $rtoi($cos(phase) * (1 << 14));
+            sin_lut[k] = $rtoi($sin(phase) * (1 << 14));
+        end
+    end
+
+    initial begin
+        clk = 0;
+        sel = 0;
+
+        // TEST 1: DC INPUT
+        $display("\nTEST 1: DC input");
+
+        for (k = 0; k < 64; k = k + 1) begin
+            in_r[k] = 16'sd1 <<< 14;
+            in_i[k] = 16'sd0;
+        end
+
+        #50;
+        for (k = 0; k < 64; k = k + 1) begin
+            sel = k; #10;
+            $display("FFT[%0d] = %0d + j%0d", k, out_r, out_i);
+        end
+
+        // TEST 2: IMPULSE INPUT
+        $display("\nTEST 2: Impulse input");
+
+        in_r[0] = 16'sd1 <<< 14;
+        in_i[0] = 16'sd0;
+        for (k = 1; k < 64; k = k + 1) begin
+            in_r[k] = 16'sd0;
+            in_i[k] = 16'sd0;
+        end
+
+        #50;
+        for (k = 0; k < 64; k = k + 1) begin
+            sel = k; #10;
+            $display("FFT[%0d] = %0d + j%0d", k, out_r, out_i);
+        end
+
+        // TEST 3: TRUE SINGLE TONE (bin = 5)
+        $display("\nTEST 3: Single tone (bin 5)");
+
+        for (k = 0; k < 64; k = k + 1) begin
+            in_r[k] = cos_lut[k];
+            in_i[k] = sin_lut[k];
+        end
+
+        #50;
+        for (k = 0; k < 64; k = k + 1) begin
+            sel = k; #10;
+            $display("FFT[%0d] = %0d + j%0d", k, out_r, out_i);
+        end
+
+        // TEST 4: QPSK INPUT
+        $display("\nTEST 4: QPSK input");
+
+        for (k = 0; k < 64; k = k + 1) begin
+            case (k % 4)
+                0: begin in_r[k] =  16'sd1 <<< 14; in_i[k] =  16'sd1 <<< 14; end
+                1: begin in_r[k] =  16'sd1 <<< 14; in_i[k] = -16'sd1 <<< 14; end
+                2: begin in_r[k] = -16'sd1 <<< 14; in_i[k] =  16'sd1 <<< 14; end
+                3: begin in_r[k] = -16'sd1 <<< 14; in_i[k] = -16'sd1 <<< 14; end
+            endcase
+        end
+
+        #50;
+        for (k = 0; k < 64; k = k + 1) begin
+            sel = k; #10;
+            $display("FFT[%0d] = %0d + j%0d", k, out_r, out_i);
+        end
+
+        $finish;
+    end
+    integer d;
+
+    initial begin
+        $dumpfile("fft64.vcd");
+
+        // Clock & select
+        $dumpvars(0, clk);
+        $dumpvars(0, sel);
+
+        // Outputs 
+        $dumpvars(0, out_r);
+        $dumpvars(0, out_i);
+
+        // Inputs
+        for (d = 0; d < 64; d = d + 1) begin
+            $dumpvars(0, in_r[d]);
+            $dumpvars(0, in_i[d]);
+        end
+    end
+
+endmodule
