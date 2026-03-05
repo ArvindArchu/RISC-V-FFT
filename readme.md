@@ -1,8 +1,10 @@
-#RISC-V pipelined implementation
-This branch will contain a pipelined processor with all superscalar features disabled, it will serve as a base upon which the other modules for supersclar will be integrated
+# RISC-V Pipelined Implementation
 
-##Structure
+This branch contains a pipelined RISC-V processor implementation with all superscalar features disabled.  
+It serves as the baseline design on top of which superscalar features will later be integrated.
 
-- `rtl/` – processor modules
-- `sim/` – simulation testbench
+## Structure
+
+- `rtl/` – processor RTL modules
+- `sim/` – simulation testbench and generated simulation outputs
 - `makefile` – build and simulation automation
